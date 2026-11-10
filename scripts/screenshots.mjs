@@ -28,8 +28,51 @@ const aiDone = () => page.waitForSelector("#aiExplain[data-source]", { timeout: 
 await page.locator(".row.charge", { hasText: "IronWorks" }).first().click(); await page.waitForSelector("#drawer:not([hidden])");
 await aiDone();
 console.log("gym explanation source:", await page.getAttribute("#aiExplain", "data-source"));
-await shot("03-recognizer-doesnt-look-like-you", false);
-await shot("08-gemini-explanation", false);
+// 03: crop to the model score + feature reasons (hide Gemini / ask / facts so this shot is not identical to 08).
+await page.evaluate(() => {
+  const root = document.querySelector("#drawerContent");
+  if (!root) return;
+  const hide = [];
+  const ai = root.querySelector("#aiExplain");
+  if (ai) hide.push(ai);
+  for (const card of root.querySelectorAll(".card")) {
+    const h = card.querySelector("h3")?.textContent || "";
+    if (card.classList.contains("ask") || h.includes("What we know") || h.includes("Card")) hide.push(card);
+  }
+  for (const el of hide) { el.setAttribute("data-shot-hide", "1"); el.style.display = "none"; }
+});
+await page.locator("#drawer .verdict .big").scrollIntoViewIfNeeded();
+const reasons = page.locator("#drawerContent .card", { hasText: "Model's top reasons" });
+await reasons.scrollIntoViewIfNeeded();
+const vbox = await page.locator("#drawer .verdict").boundingBox();
+const rbox = await reasons.boundingBox();
+if (!vbox || !rbox) throw new Error("missing verdict or reasons for shot 03");
+const x = Math.max(0, Math.min(vbox.x, rbox.x) - 16);
+const y = Math.max(0, Math.min(vbox.y, rbox.y) - 12);
+const right = Math.min(1360, Math.max(vbox.x + vbox.width, rbox.x + rbox.width) + 16);
+const bottom = Math.min(900, Math.max(vbox.y + vbox.height, rbox.y + rbox.height) + 16);
+await page.waitForTimeout(400);
+await page.screenshot({ path: `${OUT}03-recognizer-doesnt-look-like-you.png`, clip: { x, y, width: right - x, height: bottom - y } });
+console.log(`${OUT}03-recognizer-doesnt-look-like-you.png`);
+await page.evaluate(() => {
+  document.querySelectorAll("[data-shot-hide]").forEach((el) => { el.style.display = ""; el.removeAttribute("data-shot-hide"); });
+});
+// 08: focus on the Gemini explanation and recommended action.
+await page.locator("#aiExplain").scrollIntoViewIfNeeded();
+await page.waitForTimeout(400);
+const aiBox = await page.locator("#aiExplain").boundingBox();
+if (!aiBox) throw new Error("missing #aiExplain for shot 08");
+const pad = 12;
+await page.screenshot({
+  path: `${OUT}08-gemini-explanation.png`,
+  clip: {
+    x: Math.max(0, aiBox.x - pad),
+    y: Math.max(0, aiBox.y - pad),
+    width: Math.min(1360, aiBox.width + pad * 2),
+    height: Math.min(900, aiBox.height + pad * 2),
+  },
+});
+console.log(`${OUT}08-gemini-explanation.png`);
 await page.locator(".chip").first().click();
 await page.waitForSelector("#askOut .answer[data-source]", { timeout: 45000 });
 console.log("Q&A source:", await page.getAttribute("#askOut .answer", "data-source"));
