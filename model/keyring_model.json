@@ -1,0 +1,67 @@
+{
+  "type": "logistic_regression_standardized",
+  "version": 1,
+  "features": [
+    "log_amount",
+    "log_amount_ratio",
+    "recurring_fit",
+    "off_cycle_sub",
+    "log_days_since_last",
+    "dormant",
+    "first_charge",
+    "night",
+    "velocity_24h",
+    "micro_amount"
+  ],
+  "labels": {
+    "log_amount": "Amount (log)",
+    "log_amount_ratio": "Amount vs. your usual at this merchant",
+    "recurring_fit": "Matches your subscription's amount and billing cycle",
+    "off_cycle_sub": "Subscription merchant charging off-cycle or a different amount",
+    "log_days_since_last": "Days since this merchant last charged you",
+    "dormant": "Card dormant at this merchant 180+ days",
+    "first_charge": "First charge ever from this merchant",
+    "night": "Late-night charge (00:00-05:59 your time)",
+    "velocity_24h": "Charges from this merchant in the last 24h",
+    "micro_amount": "Tiny test-sized charge (under $2)"
+  },
+  "mean": [
+    3.0363963925911905,
+    0.12075964322242168,
+    0.3356,
+    0.056933333333333336,
+    3.091793192434714,
+    0.2214,
+    0.096,
+    0.1618,
+    0.30146666666666666,
+    0.0152
+  ],
+  "scale": [
+    0.9981524247379624,
+    0.7429316280585774,
+    0.47219978822524644,
+    0.2317151891631054,
+    1.9959493699640811,
+    0.41518916170824477,
+    0.2945912422323395,
+    0.3682672399222725,
+    0.861269130734146,
+    0.12234770124524624
+  ],
+  "coef": [
+    0.2031128523115111,
+    2.4047287290432044,
+    -1.5667455404655186,
+    0.9324836431964071,
+    -0.3986219638664224,
+    1.1236639502709158,
+    0.19118566993631977,
+    0.8239477143041714,
+    2.7056879703894627,
+    1.1978815102460343
+  ],
+  "intercept": -5.421710132615648,
+  "trained_on": "synthetic",
+  "metrics_file": "model/metrics.json"
+}

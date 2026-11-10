@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Keyring · every card you've saved, one key you hold</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%2360a5fa' d='M11 4a7 7 0 1 0 6.3 10H20v3h3v-3h2v3h3v-6H17.3A7 7 0 0 0 11 4zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M11 4a7 7 0 1 0 6.3 10H20v3h3v-3h2v3h3v-6H17.3A7 7 0 0 0 11 4zm0 4a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+    <span>Keyring</span>
+  </div>
+  <div class="top-right">
+    <span id="ppStatus" class="pill">PayPal sandbox: checking…</span>
+    <span id="keyStatus" class="pill">No key yet</span>
+    <button id="reset" class="ghost danger">Reset demo</button>
+  </div>
+</header>
+<main>
+  <section class="hero">
+    <h1>Every card you've saved, in one key you hold.</h1>
+    <p>When you check out with a card at a Braintree or PayPal merchant, that merchant keeps its own saved copy. You can't see them all, and you can't take one back. Keyring shows every card you've saved across merchants, lets you lock or revoke any one (you confirm each action yourself), and explains any charge you don't recognize.</p>
+  </section>
+
+  <section class="panel" id="keyPanel">
+    <div class="head">
+      <div><h2>1 · Your key</h2><p class="muted">A random secret only you hold. Merchants link saved cards to its public handle, not to your email or phone number.</p></div>
+      <div class="btns"><button id="createKey" class="primary">Create my key</button></div>
+    </div>
+    <div id="keyInfo" class="keybox" hidden></div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div><h2>2 · Merchants (demo checkouts)</h2><p class="muted">Each merchant saves your card in <b>its own</b> PayPal vault (real sandbox calls: setup token, then payment token) and charges it with Orders v2.</p></div>
+    </div>
+    <div id="merchants" class="merchants"></div>
+    <div id="toast" class="toast" hidden></div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div><h2>3 · Your Keyring</h2><p class="muted">Every saved card across merchants. Lock blocks new charges (reversible). Revoke deletes the saved card from that merchant's PayPal vault.</p></div>
+      <div class="btns"><button id="verify" class="ghost">Check with PayPal vault</button></div>
+    </div>
+    <div id="cards" class="table"></div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <div><h2>4 · Charges</h2><p class="muted">Click any charge for the AI charge recognizer: "I don't recognize this charge."</p></div>
+    </div>
+    <div id="charges" class="table"></div>
+  </section>
+
+  <section class="panel">
+    <h2>PayPal API log</h2>
+    <p class="muted small">Every call this demo made to api-m.sandbox.paypal.com, with PayPal's debug id. Credentials never leave the server.</p>
+    <div id="apiLog" class="log"></div>
+  </section>
+  <footer class="muted" id="footer"></footer>
+</main>
+
+<div id="drawer" class="drawer" hidden><div class="backdrop" data-close></div><div class="drawer-body"><button class="close" data-close aria-label="Close">×</button><div id="drawerContent"></div></div></div>
+<div id="modal" class="modal" hidden><div class="backdrop" data-close></div><div class="modal-body"><button class="close" data-close aria-label="Close">×</button><div id="modalContent"></div></div></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

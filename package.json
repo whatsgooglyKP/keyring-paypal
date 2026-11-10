@@ -1,0 +1,29 @@
+{
+  "name": "keyring",
+  "version": "0.1.0",
+  "description": "Keyring: a customer-held key to see, lock, and revoke cards saved at PayPal/Braintree merchants, plus an AI charge recognizer. PayPal sandbox prototype.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "prestart": "npm run build",
+    "start": "node dist/server.js",
+    "train": "python3 scripts/train_model.py",
+    "smoke": "node scripts/smoke.mjs",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "playwright": "^1.50.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
