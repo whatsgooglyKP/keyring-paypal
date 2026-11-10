@@ -26,13 +26,27 @@ export interface Charge {
 }
 export interface Consent { id: string; action: "lock" | "unlock" | "revoke"; cardId: string; at: string; acknowledgedSubscription?: boolean; via: "keyring_key" }
 export interface Intent { id: string; cardId: string; action: "revoke"; expiresAt: number; warnings: string[]; requiresSubscriptionAck: boolean }
+/**
+ * Proactive alert: created automatically when a NEW charge on a saved card scores below the alert threshold.
+ * The score comes only from the ML recognizer. Gemini (or the labeled template) explanation is attached afterwards.
+ * An alert never acts: lock / revoke still go through the normal endpoints with the cardholder's confirmation.
+ */
+export interface Alert {
+  id: string; chargeId: string; cardId: string; merchantId: string; merchantName: string; amount: number; description: string;
+  card: string; chargeAt: string; createdAt: string;
+  looksLikeYou: number; verdict: string; headline: string; threshold: number;
+  status: "open" | "reviewed";            // reviewed = cardholder handled it (This was me / locked / revoked)
+  resolution?: "this_was_me" | "locked" | "revoked"; resolvedAt?: string;
+  read: boolean;                          // seen in the alerts list (drives the bell's unread count)
+  aiPending: boolean; ai?: Explanation;
+}
 export interface State {
   keyring?: { handle: string; keyHash: string; createdAt: string };
-  cards: Card[]; charges: Charge[]; consents: Consent[]; intents: Intent[]; apiLog: ApiCall[];
+  cards: Card[]; charges: Charge[]; consents: Consent[]; intents: Intent[]; apiLog: ApiCall[]; alerts: Alert[];
 }
 
 const FILE = path.join(DATA_DIR, "state.json");
-const empty = (): State => ({ cards: [], charges: [], consents: [], intents: [], apiLog: [] });
+const empty = (): State => ({ cards: [], charges: [], consents: [], intents: [], apiLog: [], alerts: [] });
 
 export function load(): State {
   try { return { ...empty(), ...JSON.parse(fs.readFileSync(FILE, "utf8")) }; } catch { return empty(); }

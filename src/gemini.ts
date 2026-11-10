@@ -17,6 +17,8 @@ export interface Attempt { model: string; ok: boolean; httpStatus?: number; ms: 
 export interface GeminiResult<T> { ok: boolean; data?: T; model?: string; attempts: Attempt[] }
 
 const RETRYABLE = new Set([429, 500, 503, 504]);
+/** A model whose daily free-tier quota is used up is skipped until Google's retryDelay passes (no wasted retries). */
+const exhaustedUntil = new Map<string, number>();
 
 /** Ask for JSON matching `schema`. `validate` may reject an answer (e.g. ungrounded) so the next model is tried. */
 export async function generateJson<T>(opts: { system: string; user: string; schema: object; temperature?: number; validate?: (d: T) => string | null }): Promise<GeminiResult<T>> {
@@ -29,6 +31,8 @@ export async function generateJson<T>(opts: { system: string; user: string; sche
     generationConfig: { responseMimeType: "application/json", responseSchema: opts.schema, temperature: opts.temperature ?? 0.2, maxOutputTokens: 1024, thinkingConfig: { thinkingLevel: "low" } },
   });
   for (const model of modelChain()) {
+    const until = exhaustedUntil.get(model) ?? 0;
+    if (until > Date.now()) { attempts.push({ model, ok: false, httpStatus: 429, ms: 0, error: `daily quota used up; skipped until ${new Date(until).toISOString()}` }); continue; }
     for (let attempt = 0; attempt < 2; attempt++) {
       const budget = TOTAL_BUDGET_MS - (Date.now() - started);
       if (budget < 1500) { attempts.push({ model, ok: false, ms: 0, error: "time budget exhausted" }); return { ok: false, attempts }; }
@@ -46,6 +50,12 @@ export async function generateJson<T>(opts: { system: string; user: string; sche
         const d: any = await r.json().catch(() => ({}));
         if (!r.ok) {
           attempts.push({ model, ok: false, httpStatus: status, ms: Date.now() - t0, error: String(d?.error?.message || r.statusText).slice(0, 160) });
+          const perDay = status === 429 && /PerDay/i.test(JSON.stringify(d?.error?.details ?? ""));
+          if (perDay) {
+            const delay = Number(/"retryDelay":"(\d+)s"/.exec(JSON.stringify(d.error.details))?.[1] ?? 3600);
+            exhaustedUntil.set(model, Date.now() + delay * 1000);
+            break; // next model, no retry
+          }
           if (RETRYABLE.has(status) && attempt === 0) { await new Promise((res) => setTimeout(res, 600)); continue; }
           break; // next model
         }

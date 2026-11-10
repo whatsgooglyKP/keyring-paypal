@@ -22,9 +22,12 @@
   <div class="top-right">
     <span id="ppStatus" class="pill">PayPal sandbox: checking…</span>
     <span id="keyStatus" class="pill">No key yet</span>
+    <button id="enableNotif" class="ghost small-btn" hidden>Enable desktop alerts</button>
+    <button id="bell" class="ghost bell" aria-label="Alerts, 0 unread" title="Suspicious-charge alerts" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg><span id="bellCount" class="bell-count" hidden>0</span></button>
     <button id="reset" class="ghost danger">Reset demo</button>
   </div>
 </header>
+<div id="alertBanner" class="alert-banner" role="alert" aria-live="assertive" hidden></div>
 <main>
   <section class="hero">
     <h1>Every card you've saved, in one key you hold.</h1>

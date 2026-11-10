@@ -18,7 +18,8 @@ PayPal-branded checkout gives customers a wallet with visibility and protection.
 2. **One view of every saved card** across merchants: merchant, brand/last 4, when it was saved, last charge, and whether an active subscription depends on it. "Check with PayPal vault" re-reads each merchant's vault from PayPal to prove the cards are really there.
 3. **Lock** (reversible): blocks new charges on that card in this demo.
 4. **Revoke** (permanent): deletes the saved card from that merchant's PayPal vault. Consent is required for every action: revoke is a two-step intent → confirm, it warns when an active subscription depends on the card (and says plainly that revoking does *not* cancel the subscription), and it needs an explicit acknowledgement in that case. Every lock, unlock, and revoke is recorded as a consent record. Keyring never revokes, merges, or deletes anything on its own.
-5. **AI charge recognizer.** For "I don't recognize this charge", it explains the charge in plain language (which merchant, when you saved the card there, whether it fits your subscription's amount and cycle, how it compares with your usual amount there, dormancy, test-charge size, bursts) and scores **"looks like you"** from 1–99%, with the model's top reasons. **Google Gemini** then explains the charge in 2–3 plain-English sentences, recommends one action (keep / lock / revoke / dispute), and answers follow-up questions in an **"Ask about this charge"** box. See [AI: ML scores, Gemini explains](#ai-ml-scores-gemini-explains).
+5. **Proactive alerts.** A new charge that doesn't look like you raises an alert on its own: a banner, a bell with an unread count, and an optional desktop notification, with Gemini's explanation and one-tap Lock / Revoke / This was me buttons. Nothing runs until you confirm. See [Alerts](#alerts).
+6. **AI charge recognizer.** For "I don't recognize this charge", it explains the charge in plain language (which merchant, when you saved the card there, whether it fits your subscription's amount and cycle, how it compares with your usual amount there, dormancy, test-charge size, bursts) and scores **"looks like you"** from 1–99%, with the model's top reasons. **Google Gemini** then explains the charge in 2–3 plain-English sentences, recommends one action (keep / lock / revoke / dispute), and answers follow-up questions in an **"Ask about this charge"** box. See [AI: ML scores, Gemini explains](#ai-ml-scores-gemini-explains).
 
 ## How it uses PayPal APIs (all real sandbox calls)
 
@@ -78,6 +79,39 @@ Sample output (live, gym $249 reactivation fee after 425 dormant days, model sco
 > This $249.00 reactivation fee from IronWorks Gym was charged to your AMEX ending 0005 on Nov 10, 2026. This merchant had not charged your card in 425 days and this amount is much higher than your usual $39.00 monthly charge. Keyring's model rates this 18% likely to be you.
 > **Recommended: Lock this card.** Locking the card temporarily blocks future charges at this merchant, and you can also dispute the charge with your card issuer to get your money back.
 
+## Alerts
+
+Keyring doesn't wait for you to notice a charge. When a merchant charges a saved card (Orders v2 in the demo) and the charge **goes through**, the recognizer scores it on the spot. If it scores below the alert threshold (default **50% "looks like you"**, set with `ALERT_THRESHOLD=0.5` or `ALERT_THRESHOLD=50` in `.env`), Keyring creates an alert by itself. You don't have to click the charge.
+
+| Step | What happens |
+|---|---|
+| 1. Charge lands | `POST /api/merchants/:mid/charge` scores it with the ML model only. Below the threshold → an alert record is saved (merchant, amount, card, score, verdict) and returned as `alertId` |
+| 2. Push | The alert is pushed to every open Keyring page at once over **Server-Sent Events** (`GET /api/key/alerts/stream`). The page reads the stream with `fetch`, so the key travels in the `X-Keyring-Key` header and never in a URL. If the stream drops, the page polls `GET /api/key/alerts` every 5 s and reconnects |
+| 3. Explain | In the background, the same Gemini path as the charge drawer (retry, fallback model, then the labeled template) writes the explanation and recommended action. It's attached to the alert and pushed again |
+| 4. You decide | A banner appears at the top of the page and the bell shows the unread count. If you allowed it with **Enable desktop alerts**, a browser notification fires too (the in-app alert works either way) |
+
+![Alert banner popping up on the gym's $249 charge](screenshots/10-alert-banner.png)
+
+Each alert shows the merchant, amount, card, the model's score, Gemini's explanation with its source label (**✦ Explained by Gemini · model** or **Template fallback**), the recommended action, and four buttons:
+
+- **Lock card**: the existing lock endpoint, with its confirmation.
+- **Revoke card**: the existing two-step revoke, with its confirmation dialog and the subscription warning.
+- **This was me**: `POST /api/key/alerts/:id/dismiss` marks the alert reviewed. The card is not changed.
+- **View charge**: opens the full recognizer drawer and the "Ask about this charge" box.
+
+**An alert never acts on its own.** Keyring doesn't auto-lock or auto-revoke anything. If you lock or revoke the card through the normal confirmed endpoints, its open alerts are marked handled ("locked" / "revoked").
+
+Other rules:
+
+- Charges that look like you raise no alert. The StreamCo+ $15.49 renewal (99%) and the Bean & Brew latte (99%) stay quiet.
+- The IronWorks Gym $249 reactivation fee (18%) and the StreamCo+ $89.99 off-cycle "upgrade" (1%) raise alerts.
+- Blocked charges (locked or revoked card) raise no alert, because the money never moved.
+- **Reset demo** clears all alerts.
+
+**Endpoints** (all require the key): `GET /api/key/alerts` → `{ alerts[], unread, threshold }`, `GET /api/key/alerts/stream` (SSE events `hello`, `alert`, `alerts`, `reset`), `POST /api/key/alerts/read` (marks alerts seen), and `POST /api/key/alerts/:id/dismiss`.
+
+If a Gemini model's daily free-tier quota runs out, Keyring skips that model until Google's retry time passes, instead of retrying it on every request.
+
 ## Run it
 
 Requires Node 20+.
@@ -86,17 +120,17 @@ Requires Node 20+.
 cp .env.example .env        # add your PayPal SANDBOX client id + secret, and optionally GEMINI_API_KEY
 npm install
 npm start                   # builds, then serves http://localhost:3001
-npm run smoke               # end-to-end test against the running server (resets the demo); tests Gemini if available and always tests the template fallback
+npm run smoke               # end-to-end test against the running server (resets the demo); covers alerts + SSE, tests Gemini if available and always tests the template fallback
 npm run screenshots         # optional: headless Chromium screenshots into screenshots/
 python3 -m pip install -r requirements.txt && npm run train   # optional: retrain the model
 ```
 
-The demo: **Create my key** → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge → click a charge to open the recognizer and Gemini's explanation → ask "Should I lock this card?" → **Lock** the gym card and watch its charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → its next renewal is blocked and PayPal refuses the deleted token. **Reset demo** deletes the demo's remaining sandbox tokens.
+The demo: **Create my key** → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge (the gym's $249 fee pops up an alert by itself, while the StreamCo+ renewal doesn't) → click a charge to open the recognizer and Gemini's explanation → ask "Should I lock this card?" → **Lock** the gym card and watch its charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → its next renewal is blocked and PayPal refuses the deleted token. **Reset demo** deletes the demo's remaining sandbox tokens.
 
 ## Project layout
 
 ```
-src/server.ts      Express API: key, merchant save/charge, customer list/lock/revoke/verify, recognizer
+src/server.ts      Express API: key, merchant save/charge, customer list/lock/revoke/verify, recognizer, alerts + SSE stream
 src/paypal.ts      Sandbox REST client (OAuth, v3 vault, Orders v2), every call logged without secrets
 src/recognizer.ts  Feature building, scoring, deterministic facts + template explanation
 src/ai.ts          Gemini prompts, response schemas, grounding checks, template fallback

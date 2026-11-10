@@ -18,7 +18,7 @@ await j("/api/demo/reset", { method: "POST" });
 const kr = await j("/api/keyring", { method: "POST" });
 assert(kr.status === 200 && kr.data.key && kr.data.handle, "customer key created (secret returned once)");
 KEY = kr.data.key;
-assert(!/@|\d{7,}/.test(kr.data.handle), "handle contains no email or phone number");
+assert(/^krh_[0-9a-f]{16}$/.test(kr.data.handle), "handle is a hash-derived id (no email or phone number)");
 
 // 1. Save cards at the merchants
 const saved = {};
@@ -47,15 +47,60 @@ assert(vc.every((v) => v.listed), `PayPal vault confirms every real token (via: 
 
 // 3. Charges + 4. recognizer
 const charge = (mid, amount, description) => j(`/api/merchants/${mid}/charge`, { method: "POST", body: { amount, description } });
+// Live alert stream (SSE over fetch, key in a header). Collect events while the merchants charge.
+const noKeyStream = await fetch(BASE + "/api/key/alerts/stream");
+assert(noKeyStream.status === 401, "alert stream refused without the customer's key");
+const streamEvents = [];
+const streamCtl = new AbortController();
+(async () => {
+  try {
+    const r = await fetch(BASE + "/api/key/alerts/stream", { headers: { "X-Keyring-Key": KEY }, signal: streamCtl.signal });
+    const dec = new TextDecoder(); let buf = "";
+    for await (const part of r.body) {
+      buf += dec.decode(part, { stream: true });
+      let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        const ev = /^event: (.+)$/m.exec(chunk)?.[1]; const data = /^data: (.+)$/m.exec(chunk)?.[1];
+        if (ev && data) streamEvents.push({ ev, data: JSON.parse(data) });
+      }
+    }
+  } catch {}
+})();
+await new Promise((r) => setTimeout(r, 300));
 const renew = await charge("streamco", 15.49, "Monthly renewal");
 assert(renew.status === 200 && renew.data.charge.status === "completed" && renew.data.charge.orderId, `StreamCo renewal charged via Orders v2 vault_id (order ${renew.data.charge.orderId})`);
 assert(renew.data.charge.recognition.verdict === "LOOKS_LIKE_YOU", `renewal: ${renew.data.charge.recognition.headline}`);
 const latte = await charge("beanbrew", 6.25, "Latte");
 assert(latte.data.charge.status === "completed" && latte.data.charge.recognition.verdict === "LOOKS_LIKE_YOU", `latte charged (order ${latte.data.charge.orderId}): ${latte.data.charge.recognition.headline}`);
-const surprise = await charge("streamco", 89.99, "Annual upgrade");
+const surprise = await j(`/api/merchants/streamco/charge`, { method: "POST", body: { amount: 89.99, description: "Annual upgrade", testForceAiFallback: true } });
 assert(surprise.data.charge.recognition.verdict !== "LOOKS_LIKE_YOU", `surprise $89.99: ${surprise.data.charge.recognition.headline}`);
 const gym = await charge("ironworks", 249, "Reactivation fee");
 assert(gym.data.charge.recognition.verdict === "DOESNT_LOOK_LIKE_YOU", `dormant gym $249: ${gym.data.charge.recognition.headline}`);
+// 4b. Proactive alerts: decided by the ML score alone, at the moment the charge lands.
+const threshold = (await j("/api/key/alerts")).data.threshold;
+assert(renew.data.alertId === null && latte.data.alertId === null, `high-scoring charges raise no alert (renewal ${Math.round(renew.data.charge.recognition.looksLikeYou * 100)}%, latte ${Math.round(latte.data.charge.recognition.looksLikeYou * 100)}%; threshold ${Math.round(threshold * 100)}%)`);
+assert(typeof gym.data.alertId === "string", `gym $249 (${Math.round(gym.data.charge.recognition.looksLikeYou * 100)}%) raised an alert automatically, no click needed`);
+assert(typeof surprise.data.alertId === "string", `surprise $89.99 (${Math.round(surprise.data.charge.recognition.looksLikeYou * 100)}%) raised an alert`);
+const waitAlert = async (aid) => { for (let i = 0; i < 60; i++) { const a = (await j("/api/key/alerts")).data.alerts.find((x) => x.id === aid); if (a && !a.aiPending) return a; await new Promise((r) => setTimeout(r, 500)); } return null; };
+const gymAlert = await waitAlert(gym.data.alertId);
+assert(gymAlert && gymAlert.ai && ["gemini", "template"].includes(gymAlert.ai.source) && gymAlert.ai.explanation, `gym alert carries an explanation (source: ${gymAlert?.ai?.source}${gymAlert?.ai?.model ? ", " + gymAlert.ai.model : ""})`);
+assert(gymAlert.looksLikeYou === gym.data.charge.recognition.looksLikeYou && gymAlert.status === "open" && gymAlert.merchantName === "IronWorks Gym" && gymAlert.amount === 249, "gym alert: merchant, amount, ML score, open");
+if (gymAlert.ai.source !== "gemini") notes.push(`gym alert used template: ${gymAlert.ai.attempts.map((a) => `${a.model} ${a.httpStatus ?? ""} ${a.error}`).join("; ")}`);
+console.log(`     alert [${gymAlert.ai.source}] ${gymAlert.ai.explanation}\n     -> ${gymAlert.ai.recommendedAction}`);
+const surpriseAlert = await waitAlert(surprise.data.alertId);
+assert(surpriseAlert?.ai?.source === "template" && surpriseAlert.ai.explanation && /forced fallback/.test(surpriseAlert.ai.attempts[0]?.error || ""), "alert still gets a labeled template explanation when Gemini is unavailable");
+const alertsNow = (await j("/api/key/alerts")).data;
+assert(alertsNow.alerts.length === 2 && alertsNow.unread === 2, "exactly 2 alerts, both unread (renewal + latte created none)");
+await new Promise((r) => setTimeout(r, 300));
+const pushed = streamEvents.filter((e) => e.ev === "alert");
+assert(pushed.some((e) => e.data.alert.id === gym.data.alertId && e.data.alert.aiPending) && pushed.some((e) => e.data.alert.id === gym.data.alertId && !e.data.alert.aiPending), `alerts pushed live over SSE (${pushed.length} alert events: created, then explanation attached)`);
+const cardsAfterAlert = (await j("/api/key/cards")).data.cards;
+assert(cardsAfterAlert.find((c) => c.id === saved.ironworks.id).status === "active" && cardsAfterAlert.find((c) => c.id === saved.streamco.id).status === "active", "alerts never auto-execute: gym and StreamCo cards still active");
+const dis = await j(`/api/key/alerts/${surprise.data.alertId}/dismiss`, { method: "POST" });
+assert(dis.status === 200 && dis.data.alert.status === "reviewed" && dis.data.alert.resolution === "this_was_me" && dis.data.unread === 1, "'This was me' marks the alert reviewed (unread now 1)");
+assert((await j("/api/key/cards")).data.cards.find((c) => c.id === saved.streamco.id).status === "active", "'This was me' doesn't touch the card");
+assert((await j(`/api/key/alerts/nope/dismiss`, { method: "POST" })).status === 404 && (await j("/api/key/alerts", { noKey: true })).status === 401, "dismiss of unknown alert 404s; alerts list needs the key");
+
 const ex = await j(`/api/key/charges/${gym.data.charge.id}/explain`);
 assert(ex.data.recognition.facts.some((f) => /saved this card/.test(f)) && ex.data.recognition.facts.some((f) => /hadn't charged/.test(f)), "explanation covers when saved + dormancy");
 console.log("     explanation:\n       - " + ex.data.recognition.facts.join("\n       - "));
@@ -87,6 +132,8 @@ assert(qfb.data.source === "template" && qfb.data.proposedAction === "none" && q
 // Lock blocks
 const lock = await j(`/api/key/cards/${saved.ironworks.id}/lock`, { method: "POST", body: { confirm: true } });
 assert(lock.data.card.status === "locked", "customer locked the gym card");
+const gymAfterLock = (await j("/api/key/alerts")).data.alerts.find((a) => a.id === gym.data.alertId);
+assert(gymAfterLock.status === "reviewed" && gymAfterLock.resolution === "locked", "locking (through the normal confirmed endpoint) marks the gym alert handled");
 const blocked = await charge("ironworks", 249, "Retry");
 assert(blocked.status === 403 && blocked.data.charge.status === "blocked" && /locked/.test(blocked.data.charge.blockedReason), "charge on locked card blocked before PayPal");
 
@@ -106,6 +153,17 @@ const rej = after.data.charge.paypalRejection;
 assert(rej && !rej.ok, `PayPal itself rejects the deleted token: ${rej?.httpStatus} ${rej?.error}`);
 const cons = (await j("/api/key/cards")).data.consents;
 assert(cons.length === 2 && cons.find((c) => c.action === "revoke").acknowledgedSubscription, "each lock/revoke recorded as a customer consent");
+
+const blockedAlerts = (await j("/api/key/alerts")).data.alerts.length;
+assert(blockedAlerts === 2, "blocked charges (locked/revoked card) raise no new alert");
+streamCtl.abort();
+
+// Reset clears alerts
+await j("/api/demo/reset", { method: "POST" });
+KEY = (await j("/api/keyring", { method: "POST" })).data.key;
+const afterReset = (await j("/api/key/alerts")).data;
+assert(afterReset.alerts.length === 0 && afterReset.unread === 0, "Reset demo clears alerts");
+await j("/api/demo/reset", { method: "POST" });
 
 if (notes.length) console.log("\nSimulated steps:\n  " + notes.join("\n  "));
 console.log("\nSmoke test passed.");

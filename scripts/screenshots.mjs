@@ -5,7 +5,8 @@ const BASE = process.argv[2] || "http://localhost:3001";
 const OUT = new URL("../screenshots/", import.meta.url).pathname;
 let browser;
 try { browser = await chromium.launch(); } catch { browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome" }); }
-const page = await browser.newPage({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1 });
+const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1, permissions: ["notifications"] });
+const page = await ctx.newPage();
 page.on("dialog", (d) => d.accept());
 const shot = async (name, full = true) => { await page.waitForTimeout(400); await page.screenshot({ path: `${OUT}${name}.png`, fullPage: full }); console.log(`${OUT}${name}.png`); };
 const wait = () => page.waitForLoadState("networkidle");
@@ -21,6 +22,17 @@ await shot("01-keyring-saved-cards");
 await charge('[data-charge="streamco"][data-i="0"]');
 await charge('[data-charge="beanbrew"][data-i="0"]');
 await charge('[data-charge="ironworks"][data-i="0"]');
+// 10: the alert pops up by itself (pushed over SSE) with Gemini's explanation; nothing was clicked on the charge.
+await page.waitForSelector("#alertBanner:not([hidden]) .alert-item[data-alert]", { timeout: 15000 });
+await page.waitForFunction(() => { const b = document.querySelector("#alertBanner"); return b && !b.hidden && b.querySelector(".ai") && !b.querySelector(".ai.loading"); }, null, { timeout: 45000 });
+console.log("alert explanation source:", await page.evaluate(() => document.querySelector("#alertBanner .ai-src")?.textContent));
+await page.evaluate(() => window.scrollTo(0, 0));
+await shot("10-alert-banner", false);
+// 11: the bell's alerts list.
+await page.click("#bell"); await page.waitForSelector("#drawer:not([hidden]) .alert-item");
+await shot("11-alerts-list", false);
+await page.click("#drawer [data-close].close");
+await page.click("#alertBanner [data-hide-banner]");
 await page.locator("#charges").scrollIntoViewIfNeeded();
 await shot("02-charges-with-recognizer");
 

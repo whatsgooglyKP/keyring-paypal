@@ -57,6 +57,8 @@ async function refresh() {
   if (!key()) { $("#cards").innerHTML = `<p class="muted">Create your key first.</p>`; $("#charges").innerHTML = ""; $("#apiLog").innerHTML = ""; return; }
   const [c, ch, lg] = await Promise.all([api("/api/key/cards"), api("/api/key/charges"), api("/api/key/api-log")]);
   renderCards(c.data.cards || []);
+  cardsById = Object.fromEntries((c.data.cards || []).map((x) => [x.id, x]));
+  renderAlerts();
   renderCharges(ch.data.charges || []);
   $("#apiLog").innerHTML = (lg.data.calls || []).map((x) => `<div><span class="m">${esc(fmt(x.at))}</span><span class="mono">${esc(x.method)} ${esc(x.path)}</span><span class="${x.ok ? "good" : "bad"}">${x.httpStatus ?? "-"}</span><span class="mono">${esc(x.id || "")} ${esc(x.status || "")} ${x.error ? `<span class="bad">${esc(x.error)}</span>` : ""} <span class="m">debug ${esc(x.debugId || "-")}</span></span></div>`).join("") || `<p class="muted">No calls yet.</p>`;
 }
@@ -116,6 +118,7 @@ async function openCharge(id) {
       <span>Status</span><span>${esc(card.status)}</span></div>
       ${card.status === "active" ? `<div class="btns" style="margin-top:10px"><button class="ghost" data-lock="${card.id}" data-locked="false">Lock this card</button><button class="ghost danger" data-revoke="${card.id}">Revoke this card</button></div>` : ""}
     </div>`;
+  $("#drawerContent").dataset.view = "charge";
   $("#drawer").hidden = false;
   loadAiExplain(c.id, card);
 }
@@ -178,18 +181,168 @@ async function revokeCard(id) {
   };
 }
 
+
+// ---------- proactive alerts ----------
+// A new charge that Keyring's model scores below the alert threshold raises an alert on the server the moment it lands.
+// The page gets it in real time (Server-Sent Events over an authenticated fetch stream; polling if the stream drops),
+// shows a banner + bell, and fires a desktop notification if the user allowed it. Alerts never act on their own.
+let alerts = [];
+let cardsById = {};
+let alertThreshold = 0.5;
+const seenAlerts = new Set();
+let streamLive = false, streamCtl = null;
+const hiddenBanners = () => new Set(JSON.parse(sessionStorage.getItem("keyring.hiddenBanners") || "[]"));
+const hideBanner = (id) => { const h = hiddenBanners(); h.add(id); sessionStorage.setItem("keyring.hiddenBanners", JSON.stringify([...h])); };
+const RESOLUTION = { this_was_me: "You marked this as you (This was me). The card was not changed.", locked: "You locked this card. New charges at this merchant are blocked.", revoked: "You revoked this card. It was deleted from the merchant's PayPal vault." };
+
+function alertHtml(a, where) {
+  const pct = Math.round(a.looksLikeYou * 100);
+  const card = cardsById[a.cardId];
+  const cardStatus = card?.status || "active";
+  const ai = a.ai;
+  const aiHtml = a.aiPending
+    ? `<div class="ai loading"><span class="ai-src">Asking Gemini…</span><p class="muted">Writing a plain-English explanation from the model's facts.</p></div>`
+    : ai ? `<div class="ai">${srcLabel(ai)}<p>${esc(ai.explanation)}</p><p class="small"><b>Recommended: ${ACTION[ai.recommendedAction] || esc(ai.recommendedAction)}.</b> ${esc(ai.actionReason)}</p></div>` : "";
+  const open = a.status === "open";
+  const btns = open ? `<div class="btns alert-actions">
+      ${cardStatus === "active" ? `<button class="primary" data-lock="${esc(a.cardId)}" data-locked="false">Lock card</button>` : cardStatus === "locked" ? `<span class="status locked">card locked</span>` : ""}
+      ${cardStatus !== "revoked" ? `<button class="ghost danger" data-revoke="${esc(a.cardId)}">Revoke card</button>` : ""}
+      <button class="ghost" data-dismiss="${esc(a.id)}">This was me</button>
+      <button class="ghost" data-charge-id="${esc(a.chargeId)}">View charge</button>
+      ${where === "banner" ? `<span class="m">Nothing happens until you choose. Lock and revoke ask you to confirm.</span>` : ""}
+    </div>` : `<p class="resolved">✓ ${esc(RESOLUTION[a.resolution] || "Reviewed.")} <button class="ghost chip" data-charge-id="${esc(a.chargeId)}">View charge</button></p>`;
+  return `<div class="alert-item ${open ? "open" : "reviewed"}" data-alert="${esc(a.id)}">
+    <div class="alert-title"><span class="alert-icon" aria-hidden="true">⚠</span><div><b>Suspicious charge: ${esc(a.merchantName)} charged ${money(a.amount)}</b>
+      <div class="m">${esc(a.card)} · ${esc(fmt(a.chargeAt))} · ${esc(a.description)}</div></div></div>
+    <div class="alert-score"><span class="badge ${esc(a.verdict)}">${VERDICT[a.verdict] || esc(a.verdict)} · ${pct}%</span><span class="m">Score from Keyring's fraud model. Alerts fire under ${Math.round(a.threshold * 100)}% "looks like you".</span></div>
+    ${aiHtml}${btns}</div>`;
+}
+
+function renderBell() {
+  const unread = alerts.filter((a) => a.status === "open" && !a.read).length;
+  const b = $("#bell");
+  b.hidden = !key();
+  b.setAttribute("aria-label", `Alerts, ${unread} unread`);
+  $("#bellCount").hidden = unread === 0;
+  $("#bellCount").textContent = String(unread);
+  const n = $("#enableNotif");
+  if (!key() || !("Notification" in window)) n.hidden = true;
+  else if (Notification.permission === "default") { n.hidden = false; n.disabled = false; n.textContent = "Enable desktop alerts"; }
+  else if (Notification.permission === "granted") { n.hidden = false; n.disabled = true; n.textContent = "Desktop alerts on"; }
+  else { n.hidden = false; n.disabled = true; n.textContent = "Desktop alerts blocked in browser"; }
+}
+
+function renderBanner() {
+  const el = $("#alertBanner");
+  const hidden = hiddenBanners();
+  const open = alerts.filter((a) => a.status === "open" && !hidden.has(a.id));
+  if (!key() || !open.length) { el.hidden = true; el.innerHTML = ""; return; }
+  const a = open[0];
+  el.innerHTML = `<div class="alert-banner-inner"><button class="close" data-hide-banner="${esc(a.id)}" aria-label="Hide this banner (the alert stays in the bell)">×</button>
+    <p class="alert-kicker">Keyring alert · new charge doesn't look like you</p>${alertHtml(a, "banner")}
+    ${open.length > 1 ? `<button class="ghost chip" data-open-alerts>+ ${open.length - 1} more open alert${open.length > 2 ? "s" : ""}</button>` : ""}</div>`;
+  el.hidden = false;
+}
+
+function renderAlertsList() {
+  const dc = $("#drawerContent");
+  if ($("#drawer").hidden || dc.dataset.view !== "alerts") return;
+  dc.innerHTML = `<p class="muted small">Suspicious-charge alerts</p><h2 style="margin:0 0 4px">Alerts</h2>
+    <p class="muted small">Keyring raises an alert when a new charge scores under ${Math.round(alertThreshold * 100)}% "looks like you". It never locks or revokes on its own.</p>
+    ${alerts.length ? alerts.map((a) => alertHtml(a, "list")).join("") : `<p class="muted">No alerts yet. Charges that look like you don't raise one.</p>`}`;
+}
+
+function renderAlerts() { renderBell(); renderBanner(); renderAlertsList(); }
+
+async function openAlerts() {
+  $("#drawerContent").dataset.view = "alerts";
+  $("#drawer").hidden = false;
+  renderAlertsList();
+  if (alerts.some((a) => !a.read)) { await api("/api/key/alerts/read", { method: "POST", body: {} }); alerts.forEach((a) => (a.read = true)); renderBell(); }
+}
+
+function notifyDesktop(a) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    const n = new Notification(`Keyring: ${a.merchantName} charged ${money(a.amount)}`, { body: `${VERDICT[a.verdict] || a.verdict} (${Math.round(a.looksLikeYou * 100)}% looks like you) on ${a.card}. Open Keyring to lock, revoke, or mark "This was me".`, tag: a.id });
+    n.onclick = () => { window.focus(); openAlerts(); n.close(); };
+  } catch { /* some browsers only allow notifications from a service worker */ }
+}
+
+function upsertAlert(a) {
+  const i = alerts.findIndex((x) => x.id === a.id);
+  if (i >= 0) alerts[i] = a; else alerts.unshift(a);
+  alerts.sort((x, y) => y.createdAt.localeCompare(x.createdAt));
+  if (!seenAlerts.has(a.id)) { seenAlerts.add(a.id); if (a.status === "open") notifyDesktop(a); }
+}
+
+async function loadAlerts({ initial = false } = {}) {
+  if (!key()) { alerts = []; renderAlerts(); return; }
+  const r = await api("/api/key/alerts");
+  if (!r.ok) return;
+  alertThreshold = r.data.threshold ?? alertThreshold;
+  if (initial) r.data.alerts.forEach((a) => seenAlerts.add(a.id)); // don't re-notify alerts from before this page opened
+  const fresh = r.data.alerts.filter((a) => !seenAlerts.has(a.id));
+  alerts = r.data.alerts;
+  fresh.forEach(upsertAlert);
+  renderAlerts();
+}
+
+function onStreamEvent(chunk) {
+  let event = "message", data = "";
+  for (const line of chunk.split("\n")) { if (line.startsWith("event:")) event = line.slice(6).trim(); else if (line.startsWith("data:")) data += line.slice(5).trim(); }
+  if (!data) return;
+  const d = JSON.parse(data);
+  if (event === "hello") { alertThreshold = d.threshold ?? alertThreshold; return loadAlerts(); }
+  if (event === "alert") { const isNew = !alerts.some((x) => x.id === d.alert.id); upsertAlert(d.alert); renderAlerts(); if (isNew) refresh(); return; }
+  if (event === "alerts") return loadAlerts();
+  if (event === "reset") { alerts = []; seenAlerts.clear(); renderAlerts(); }
+}
+
+async function connectStream() {
+  if (streamCtl) streamCtl.abort();
+  if (!key()) return;
+  const ctl = new AbortController(); streamCtl = ctl;
+  try {
+    const r = await fetch("/api/key/alerts/stream", { headers: { "X-Keyring-Key": key() }, signal: ctl.signal });
+    if (!r.ok || !r.body) throw new Error(`stream ${r.status}`);
+    streamLive = true;
+    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i; while ((i = buf.indexOf("\n\n")) >= 0) { const c = buf.slice(0, i); buf = buf.slice(i + 2); try { await onStreamEvent(c); } catch {} }
+    }
+  } catch { /* fall through to polling + reconnect */ }
+  streamLive = false;
+  if (streamCtl === ctl && !ctl.signal.aborted) setTimeout(() => { if (streamCtl === ctl) connectStream(); }, 3000);
+}
+// Fallback: poll while the live stream is down.
+setInterval(() => { if (!streamLive && key()) loadAlerts(); }, 5000);
+
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("button,[data-charge-id],[data-close]");
   if (!t) return;
   if (t.matches("[data-close]")) { $("#drawer").hidden = true; $("#modal").hidden = true; return; }
+  if (t.id === "bell" || t.matches("[data-open-alerts]")) return openAlerts();
+  if (t.id === "enableNotif") { if ("Notification" in window) await Notification.requestPermission(); return renderBell(); }
+  if (t.dataset.hideBanner) { hideBanner(t.dataset.hideBanner); return renderBanner(); }
+  if (t.dataset.dismiss) {
+    const r = await api(`/api/key/alerts/${t.dataset.dismiss}/dismiss`, { method: "POST" });
+    if (r.ok) { upsertAlert(r.data.alert); renderAlerts(); toast(`Marked as you: ${esc(r.data.alert.merchantName)} ${money(r.data.alert.amount)}. Your card was not changed.`, "ok"); }
+    else toast(esc(r.data.error), "err");
+    return;
+  }
   if (t.id === "createKey") {
     const r = await api("/api/keyring", { method: "POST" });
     if (!r.ok) return toast(esc(r.data.error), "err");
     localStorage.setItem("keyring.key", r.data.key); localStorage.setItem("keyring.handle", r.data.handle);
     toast(`Key created. Handle <code>${esc(r.data.handle)}</code>. The secret is stored only in this browser.`, "ok");
-    await loadStatus(); return refresh();
+    await loadStatus(); await refresh(); await loadAlerts({ initial: true }); connectStream(); return;
   }
-  if (t.id === "reset") { if (!confirm("Reset the demo? This deletes the demo's sandbox vault tokens and local data.")) return; await api("/api/demo/reset", { method: "POST" }); localStorage.clear(); $("#toast").hidden = true; await loadStatus(); return refresh(); }
+  if (t.id === "reset") { if (!confirm("Reset the demo? This deletes the demo's sandbox vault tokens and local data.")) return; await api("/api/demo/reset", { method: "POST" }); localStorage.clear(); sessionStorage.removeItem("keyring.hiddenBanners"); if (streamCtl) streamCtl.abort(); streamCtl = null; alerts = []; seenAlerts.clear(); $("#drawer").hidden = true; $("#toast").hidden = true; await loadStatus(); await refresh(); renderAlerts(); return; }
   if (t.id === "verify") { t.disabled = true; const r = await api("/api/key/verify", { method: "POST" }); t.disabled = false; toast(r.ok ? "Checked each merchant's PayPal vault." : esc(r.data.error), r.ok ? "ok" : "err"); return refresh(); }
   if (t.dataset.save) {
     t.disabled = true; t.textContent = "Saving with PayPal vault…";
@@ -207,7 +360,7 @@ document.addEventListener("click", async (e) => {
     const c = r.data.charge;
     if (!c) toast(esc(r.data.error), "err");
     else if (c.status === "blocked") toast(`⛔ ${esc(c.blockedReason)}`, "err");
-    else toast(`${esc(m.name)} charged ${money(c.amount)}: ${esc(c.status)}${c.orderId ? ` · PayPal order <span class="mono">${esc(c.orderId)}</span>` : ""}. Recognizer: <b>${esc(c.recognition.headline)}</b>`, c.status === "completed" ? "ok" : "err");
+    else toast(`${esc(m.name)} charged ${money(c.amount)}: ${esc(c.status)}${c.orderId ? ` · PayPal order <span class="mono">${esc(c.orderId)}</span>` : ""}. Recognizer: <b>${esc(c.recognition.headline)}</b>${r.data.alertId ? " · ⚠ Keyring raised an alert" : ""}`, c.status === "completed" ? "ok" : "err");
     return refresh();
   }
   if (t.dataset.q) { $("#askInput").value = t.dataset.q; return ask($("#askForm").dataset.charge, t.dataset.q); }
@@ -224,3 +377,5 @@ document.addEventListener("submit", (e) => {
 
 await loadStatus();
 await refresh();
+await loadAlerts({ initial: true });
+connectStream();

@@ -89,3 +89,22 @@ footer{font-size:12.5px;padding:8px 0 40px}
 .ai-src.gem{color:#c4b5fd;border-color:rgba(196,181,253,.7);background:rgba(167,139,250,.1)}.ai-src.tpl{color:var(--med);border-color:rgba(251,191,36,.55)}
 .ask form{display:flex;gap:8px}.ask input{flex:1}.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chip{font-size:12.5px;padding:4px 10px}
 .answer{margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:14px}.answer p{margin:6px 0 0}
+/* Proactive alerts (all text pairs checked against WCAG AA) */
+.bell{position:relative;display:inline-flex;align-items:center;justify-content:center;padding:6px 10px}
+.bell svg{width:18px;height:18px;fill:var(--text)}
+.bell-count{position:absolute;top:-7px;right:-7px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:var(--high);color:#1a0505;font-size:12px;font-weight:700;line-height:20px;text-align:center}
+.small-btn{font-size:12.5px;padding:5px 10px}
+.alert-banner{position:sticky;top:10px;margin:16px auto 0;width:min(1132px,calc(100% - 48px));z-index:15;animation:alert-in .25s ease-out}
+.alert-banner-inner{position:relative;background:var(--bg);border:2px solid var(--high);border-radius:var(--r);padding:16px 18px;box-shadow:0 18px 50px rgba(0,0,0,.55)}
+.alert-banner .close{top:6px;right:10px}
+.alert-kicker{margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#fca5a5}
+@keyframes alert-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.alert-banner{animation:none}}
+.alert-item{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;background:var(--panel)}
+.alert-banner .alert-item{border:0;padding:0;margin:0;background:transparent}
+.alert-item.open{border-color:rgba(248,113,113,.7)}
+.alert-title{display:flex;gap:10px;align-items:flex-start}.alert-title b{font-size:16px}
+.alert-icon{color:#fca5a5;font-size:20px;line-height:1.2}
+.alert-score{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.alert-actions{margin-top:12px;align-items:center}
+.resolved{margin:10px 0 0;color:var(--low);font-size:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}

@@ -7,7 +7,7 @@ import { metrics, modelInfo } from "./model.js";
 import { recognize } from "./recognizer.js";
 import { answerQuestion, explainCharge, type CardCtx, type ChargeCtx } from "./ai.js";
 import { geminiConfigured, modelChain } from "./gemini.js";
-import { id, load, save, sha256, syntheticHistory, type Card, type Charge, type State } from "./store.js";
+import { id, load, save, sha256, syntheticHistory, type Alert, type Card, type Charge, type State } from "./store.js";
 import {
   chargeVaultedCard, createPaymentToken, createSetupToken, deletePaymentToken, getPaymentToken,
   listPaymentTokens, paypalConfigured, pingPayPal, type ApiCall, type Rec,
@@ -42,7 +42,7 @@ app.get("/api/status", async (_req, res) => {
   const ping = cfg.ok ? await pingPayPal() : { ok: false, error: cfg.reason };
   const s = load();
   res.json({ paypal: { configured: cfg.ok, authOk: ping.ok, error: ping.error, env: "sandbox" }, keyring: s.keyring ? { handle: s.keyring.handle, createdAt: s.keyring.createdAt } : null,
-    merchants: MERCHANTS.map(({ testCard, ...m }) => ({ ...m, testCardLast4: testCard.number.slice(-4) })), model: { ...modelInfo, metrics }, ai: { provider: "google-gemini", configured: geminiConfigured(), models: modelChain() } });
+    merchants: MERCHANTS.map(({ testCard, ...m }) => ({ ...m, testCardLast4: testCard.number.slice(-4) })), model: { ...modelInfo, metrics }, ai: { provider: "google-gemini", configured: geminiConfigured(), models: modelChain() }, alerts: { threshold: ALERT_THRESHOLD } });
 });
 
 app.post("/api/keyring", (_req, res) => {
@@ -127,8 +127,11 @@ app.post("/api/merchants/:mid/charge", async (req, res) => {
   }
   ch.recognition = recognize(ch, card, s.charges);
   s.charges.push(ch);
+  // Proactive alert: decided by the ML score only, the moment the charge lands. Never locks or revokes anything.
+  const alert = maybeCreateAlert(s, ch, card);
   save(s);
-  res.status(ch.status === "blocked" ? 403 : 200).json({ charge: ch });
+  if (alert) { broadcast("alert", { alert: alertView(alert), unread: unreadCount(s) }); void attachAlertExplanation(alert.id, req.body?.testForceAiFallback === true); }
+  res.status(ch.status === "blocked" ? 403 : 200).json({ charge: ch, alertId: alert?.id ?? null });
 });
 
 // ---------- customer side (requires the key) ----------
@@ -175,7 +178,9 @@ app.post("/api/key/cards/:cid/lock", requireKey, (req, res) => {
   const lock = req.body?.locked !== false;
   c.locked = lock; c.lockedAt = lock ? now() : undefined;
   s.consents.push({ id: id("consent"), action: lock ? "lock" : "unlock", cardId: c.id, at: now(), via: "keyring_key" });
+  const resolved = lock ? resolveAlertsForCard(s, c.id, "locked") : 0;
   save(s);
+  if (resolved) broadcast("alerts", { unread: unreadCount(s) });
   res.json({ card: cardView(s, c) });
 });
 
@@ -212,6 +217,7 @@ app.post("/api/key/cards/:cid/revoke", requireKey, async (req, res) => {
   c.revokedAt = now(); c.locked = false;
   s.intents = s.intents.filter((i) => i.id !== intent.id);
   s.consents.push({ id: id("consent"), action: "revoke", cardId: c.id, at: now(), acknowledgedSubscription: req.body?.acknowledgeSubscription === true, via: "keyring_key" });
+  if (resolveAlertsForCard(s, c.id, "revoked")) broadcast("alerts", { unread: unreadCount(s) });
   save(s);
   res.json({ card: cardView(s, c), deleteCall: call, verifyCall: verify });
 });
@@ -282,6 +288,97 @@ app.post("/api/key/ask", requireKey, async (req, res) => {
   res.json({ ...answer, card: target ? { id: target.id, merchant: target.merchant, card: target.card, status: target.status } : null, executed: false });
 });
 
+// ---------- proactive alerts ----------
+/** "Looks like you" below this (0-1) creates an alert. ALERT_THRESHOLD accepts 0.5 or 50. Default 0.5. */
+const ALERT_THRESHOLD = (() => { const v = Number(process.env.ALERT_THRESHOLD); return Number.isFinite(v) && v > 0 ? (v > 1 ? v / 100 : v) : 0.5; })();
+const unreadCount = (s: State) => s.alerts.filter((a) => a.status === "open" && !a.read).length;
+const alertView = (a: Alert) => ({ ...a, ai: a.ai ? { ...a.ai, attempts: a.ai.attempts } : undefined });
+
+/** Only charges that actually went through are alerted (a blocked charge already didn't reach you). Synthetic history never alerts. */
+function maybeCreateAlert(s: State, ch: Charge, card: Card): Alert | null {
+  if (ch.status !== "completed" || ch.source === "synthetic_history" || !ch.recognition) return null;
+  if (ch.recognition.looksLikeYou >= ALERT_THRESHOLD) return null;
+  const m = merchantById(ch.merchantId)!;
+  const a: Alert = { id: id("alert"), chargeId: ch.id, cardId: card.id, merchantId: m.id, merchantName: m.name, amount: ch.amount, description: ch.description,
+    card: `${card.brand} •••• ${card.last4}`, chargeAt: ch.at, createdAt: now(), looksLikeYou: ch.recognition.looksLikeYou, verdict: ch.recognition.verdict,
+    headline: ch.recognition.headline, threshold: ALERT_THRESHOLD, status: "open", read: false, aiPending: true };
+  s.alerts.push(a);
+  return a;
+}
+
+/** Same Gemini path (with retry, model fallback, labeled template) as the charge drawer. Runs after the merchant's response. */
+async function attachAlertExplanation(alertId: string, forceFallback = false) {
+  try {
+    const s = load();
+    const a = s.alerts.find((x) => x.id === alertId); const ch = a && s.charges.find((c) => c.id === a.chargeId); const card = ch && s.cards.find((c) => c.id === ch.cardId);
+    if (!a || !ch || !card) return;
+    const ctx = cardCtx(s, card);
+    const ai = await explainCharge(chargeCtx(ch), ch.recognition ?? recognize(ch, card, s.charges), ctx, { forceFallback });
+    const s2 = load(); // re-load: the user may have acted (or reset) while Gemini was thinking
+    const a2 = s2.alerts.find((x) => x.id === alertId);
+    if (!a2) return;
+    a2.ai = { ...ai, cardStatus: ctx.status }; a2.aiPending = false;
+    const ch2 = s2.charges.find((c) => c.id === a2.chargeId);
+    if (ch2 && ai.source === "gemini" && !forceFallback) ch2.ai = { ...ai, cardStatus: ctx.status };
+    save(s2);
+    broadcast("alert", { alert: alertView(a2), unread: unreadCount(s2) });
+  } catch (e) {
+    const s = load(); const a = s.alerts.find((x) => x.id === alertId);
+    if (a) { a.aiPending = false; save(s); broadcast("alert", { alert: alertView(a), unread: unreadCount(s) }); }
+    console.error("alert explanation failed:", (e as Error).message);
+  }
+}
+
+/** When the cardholder locks or revokes (through the normal confirmed endpoints), their open alerts on that card are marked handled. */
+function resolveAlertsForCard(s: State, cardId: string, how: "locked" | "revoked") {
+  let n = 0;
+  for (const a of s.alerts) if (a.cardId === cardId && a.status === "open") { a.status = "reviewed"; a.resolution = how; a.resolvedAt = now(); a.read = true; n++; }
+  return n;
+}
+
+// Real-time push: Server-Sent Events over an authenticated fetch stream (the key travels in a header, never in a URL).
+const streams = new Set<Response>();
+function broadcast(event: string, data: unknown) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const r of streams) r.write(msg);
+}
+setInterval(() => { for (const r of streams) r.write(": ping\n\n"); }, 20_000).unref();
+
+app.get("/api/key/alerts/stream", requireKey, (req, res) => {
+  res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+  res.flushHeaders();
+  res.write(`event: hello\ndata: ${JSON.stringify({ unread: unreadCount(load()), threshold: ALERT_THRESHOLD })}\n\n`);
+  streams.add(res);
+  req.on("close", () => streams.delete(res));
+});
+
+app.get("/api/key/alerts", requireKey, (_req, res) => {
+  const s = load();
+  res.json({ alerts: [...s.alerts].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(alertView), unread: unreadCount(s), threshold: ALERT_THRESHOLD });
+});
+
+/** Mark alerts as seen (opening the alerts list). Does not resolve them. */
+app.post("/api/key/alerts/read", requireKey, (req, res) => {
+  const s = load();
+  const ids: string[] | undefined = Array.isArray(req.body?.ids) ? req.body.ids : undefined;
+  for (const a of s.alerts) if (!ids || ids.includes(a.id)) a.read = true;
+  save(s);
+  broadcast("alerts", { unread: unreadCount(s) });
+  res.json({ unread: unreadCount(s) });
+});
+
+/** "This was me": marks the alert reviewed. The card is not touched. */
+app.post("/api/key/alerts/:id/dismiss", requireKey, (req, res) => {
+  const s = load();
+  const a = s.alerts.find((x) => x.id === req.params.id);
+  if (!a) return res.status(404).json({ error: "alert not found" });
+  if (a.status === "open") { a.status = "reviewed"; a.resolution = "this_was_me"; a.resolvedAt = now(); }
+  a.read = true;
+  save(s);
+  broadcast("alert", { alert: alertView(a), unread: unreadCount(s) });
+  res.json({ alert: alertView(a), unread: unreadCount(s) });
+});
+
 app.get("/api/key/api-log", requireKey, (_req, res) => res.json({ calls: [...load().apiLog].reverse() }));
 
 /** Reset: deletes every still-active sandbox token we created, then clears local state. */
@@ -289,7 +386,10 @@ app.post("/api/demo/reset", async (_req, res) => {
   const s = load();
   const cleanup: ApiCall[] = [];
   for (const c of s.cards) if (c.source === "paypal_vault" && !c.revokedAt && c.paymentTokenId) cleanup.push((await deletePaymentToken(c.paymentTokenId)).log);
-  save({ cards: [], charges: [], consents: [], intents: [], apiLog: [] });
+  save({ cards: [], charges: [], consents: [], intents: [], apiLog: [], alerts: [] });
+  broadcast("reset", {});
+  for (const c of streams) c.end(); // the old key is gone; open pages reconnect with the new key
+  streams.clear();
   res.json({ ok: true, deletedSandboxTokens: cleanup.length });
 });
 
