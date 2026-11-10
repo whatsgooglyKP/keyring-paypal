@@ -1,0 +1,20 @@
+Official PayPal marks. These files are exact, unmodified copies downloaded from
+PayPal-hosted URLs on 2026-11-10. Do not recrop, recolor, restyle, or otherwise
+alter them. Display only at official proportions, on a white background, with
+clear space equal to the height of the letter "P" in the PayPal logo.
+
+PP_logo_h_100x26.png
+  URL: https://www.paypalobjects.com/webstatic/en_US/i/buttons/PP_logo_h_100x26.png
+  Official horizontal PayPal logo at the Interface Guide optimal logo size
+  (100 × 26–28 px). Used only in the footer "Powered by" attribution on a white
+  background, next to the trademark statement (legal / about placement).
+
+pp_cc_mark_74x46.jpg
+  URL: https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_74x46.jpg
+  Official PayPal acceptance mark (raster is 150 × 94, displayed at 74 × 46 CSS
+  pixels). Used in the header and next to PayPal Vault / saved-card features.
+
+pp_cc_mark_37x23.jpg
+  URL: https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_37x23.jpg
+  Official PayPal acceptance mark at an Interface Guide available size
+  (37 × 23 px). Used on the demo merchant checkout cards.

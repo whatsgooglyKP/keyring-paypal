@@ -29,7 +29,7 @@ async function loadStatus() {
   renderKey();
   renderMerchants();
   const mt = status.model.metrics || {};
-  $("#footer").innerHTML = `Charge recognizer: logistic regression on ${status.model.features.length} features, trained on <b>synthetic</b> data (held-out ROC AUC ${mt.roc_auc ?? "?"} on synthetic data, not real-world performance). ${status.ai?.configured ? `Plain-English explanations and answers by Google Gemini (${esc(status.ai.models.join(" → "))}), grounded only in the model's facts; the score always comes from the model, and a labeled template is used if Gemini is unavailable.` : "Gemini not configured: explanations are deterministic templates."} Saved-card history before today is synthetic and labeled as such. PayPal sandbox only. MIT license.`;
+  $("#footerMeta").innerHTML = `Charge recognizer: logistic regression on ${status.model.features.length} features, trained on <b>synthetic</b> data (held-out ROC AUC ${mt.roc_auc ?? "?"} on synthetic data, not real-world performance). ${status.ai?.configured ? `Plain-English explanations and answers by Google Gemini (${esc(status.ai.models.join(" → "))}), grounded only in the model's facts; the score always comes from the model, and a labeled template is used if Gemini is unavailable.` : "Gemini not configured: explanations are deterministic templates."} Saved-card history before today is synthetic and labeled as such. PayPal sandbox only. MIT license.`;
 }
 
 function renderKey() {
@@ -49,6 +49,7 @@ function renderMerchants() {
       <div><b>${m.emoji} ${esc(m.name)}</b><div class="cat">${esc(m.category)}${m.subscription ? ` · ${esc(m.subscription.plan)} ${money(m.subscription.amount)}/${m.subscription.intervalDays}d` : ""}</div></div>
       <button class="primary" data-save="${m.id}" ${key() ? "" : "disabled"}>Save card at checkout (•••• ${m.testCardLast4})</button>
       <div class="presets">${m.presets.map((p, i) => `<button class="ghost" data-charge="${m.id}" data-i="${i}" ${key() ? "" : "disabled"}>Merchant charges: ${esc(p.label)}</button>`).join("")}</div>
+      <div class="pp-accept"><img src="/marks/pp_cc_mark_37x23.jpg" width="37" height="23" alt="PayPal Acceptance Mark"></div>
     </div>`).join("");
 }
 

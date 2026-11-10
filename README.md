@@ -108,6 +108,39 @@ public/            Static UI
 scripts/           train_model.py, smoke.mjs, screenshots.mjs
 ```
 
+
+## Branding
+
+Keyring is its own product. The name, key wordmark, and layout are Keyring's — not a PayPal login or official PayPal product. Accents use official PayPal blues; PayPal marks appear only as official, unmodified assets on a white background, with the required trademark notice.
+
+**Colors** (UI accents only; from PayPal's [Brand Identity Quick Guide, 2022](https://filecache.mediaroom.com/mr5mr_paypal/184713/download/PP_Brand%20Guidelines_Newsroom_2022.pdf) on the [PayPal Newsroom media resources](https://newsroom.paypal-corp.com/media-resources) site):
+
+| Token | Hex | Role in Keyring |
+|---|---|---|
+| Left Blue | `#003087` | Primary-button hover, deep accent |
+| Middle Blue | `#001C64` | Panel depth |
+| Right Blue | `#0070E0` | Primary buttons and Keyring's accent |
+| Slate | `#001435` | Page background |
+| Off-white | `#FAF8F5` | Body text |
+| Serenity Blue | `#E5F0FA` | Hero supporting text |
+| Gold | `#FFD140` | Reserved (not used as a chrome color) |
+
+**Marks** (exact copies in `public/marks/`; source URLs in `public/marks/SOURCES.txt`):
+
+| File | Official URL | Where it appears |
+|---|---|---|
+| PayPal acceptance mark, 74×46 | https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_74x46.jpg | Header "Powered by" lockup; demo-checkout section; saved-cards / vault heading |
+| PayPal acceptance mark, 37×23 | https://www.paypalobjects.com/webstatic/mktg/logo/pp_cc_mark_37x23.jpg | Each demo merchant checkout card (Interface Guide available size) |
+| Horizontal PayPal logo, 100×26 | https://www.paypalobjects.com/webstatic/en_US/i/buttons/PP_logo_h_100x26.png | Footer "Powered by" attribution, next to the trademark statement |
+
+**Guideline lines that permit this:**
+
+- [PayPal Developer Agreement](https://www.paypal.com/us/legalhub/paypal/xdeveloper-full?locale.x=en_US) §8.3.3: if you are not using a PayPal Button, you must add "Powered by PayPal" to the first page of your payment flow. §9.3 licenses PayPal Marks solely in connection with advertising and marketing your PayPal-enabled services, and only in accordance with PayPal's Branding Requirements; any other use needs prior approval.
+- [Development policies and guidelines](https://developer.paypal.com/reference/guidelines/policiesAndGuidelines/): follow the Branding Guidelines in Chapter 2 of the [PayPal Interface Guide](https://www.paypalobjects.com/webstatic/en_US/developer/docs/pdf/PayPalX_Interface_Guide_Edition1_1.pdf) and use only authorized PayPal buttons / marks.
+- Interface Guide ch. 2: do not use "PayPal" in the product name or as the product logo (Keyring is the product name). The **acceptance mark** is for checkout and payment-confirmation pages, and to indicate you accept / use PayPal (integration and promotion). The **PayPal logo** is for "About PayPal" pages on a white background and promotional materials — used here only in the footer legal attribution. All processed marks on a **white background**. Clear space around each mark equals the height of the letter "P" in the PayPal logo. Do not modify the marks.
+- Interface Guide §2.8 official trademark statement includes "PayPal and the PayPal logo are trademarks of PayPal, Inc." The footer also states that Keyring is an independent hackathon project, not affiliated with or endorsed by PayPal (User Agreement: merchant HTML logos may not be displayed in a manner that implies PayPal's sponsorship or endorsement).
+- [PayPal AI Hackathon Official Rules](https://paypalaihackathon.devpost.com/rules) §11: any use of Sponsor intellectual property in a submission shall be solely to the extent provided for in those rules; the marks above are used under the Developer Agreement and Branding Requirements, not as a claim that PayPal built or endorses Keyring.
+
 ## License
 
 MIT, © 2026 Kevin Pinard. No code is copied from paypal-examples; the PayPal API usage follows PayPal's public REST documentation.
