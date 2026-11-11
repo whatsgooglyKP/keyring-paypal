@@ -2,6 +2,16 @@
 
 **Every card you've saved, in one key you hold.** A PayPal AI Hackathon 2026 prototype (PayPal sandbox only).
 
+## Try it live
+
+**Live demo: [keyring-paypal.onrender.com](https://keyring-paypal.onrender.com)**. There's nothing to install. It runs against the real PayPal sandbox, with Gemini switched on.
+
+- It's hosted on Render's free plan, so if the site has been idle, the first page load can take about **50 seconds** while it wakes up.
+- Everyone who visits shares **one demo**. The demo is wiped whenever the site restarts or redeploys. Click **Reset demo** in the header to start fresh.
+- If Gemini's free daily quota runs out, explanations switch to the labeled template fallback. The ML score, the alerts, and every PayPal call still work.
+
+Walkthrough: **Create my key** → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge (the gym's $249 fee raises an alert by itself) → open a charge for Gemini's explanation and ask "Should I lock this card?" → **Lock** the gym card and watch its next charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → PayPal refuses the deleted token (`403`). The full step-by-step is under [Run it locally](#run-it-locally).
+
 ## The problem
 
 When you pay by card at a merchant that runs on Braintree or PayPal's card processing (unbranded checkout), that merchant keeps its own saved copy of your card in **its own vault**. Vaults are per-merchant by design. The result for the customer:
@@ -112,9 +122,9 @@ Other rules:
 
 If a Gemini model's daily free-tier quota runs out, Keyring skips that model until Google's retry time passes, instead of retrying it on every request.
 
-## Run it
+## Run it locally
 
-Requires Node 20+.
+The [live demo](#try-it-live) is the quickest way to try Keyring. To run your own copy with your own PayPal sandbox app, you need Node 20+.
 
 ```bash
 cp .env.example .env        # add your PayPal SANDBOX client id + secret, and optionally GEMINI_API_KEY
