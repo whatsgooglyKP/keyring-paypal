@@ -2,16 +2,17 @@ import "dotenv/config";
 import crypto from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { PUBLIC_DIR } from "./paths.js";
-import { MERCHANTS, merchantById } from "./merchants.js";
+import { MERCHANTS, merchantById, MAISON_VALE } from "./merchants.js";
 import { metrics, modelInfo } from "./model.js";
 import { recognize } from "./recognizer.js";
-import { answerQuestion, explainCharge, type CardCtx, type ChargeCtx } from "./ai.js";
+import { answerQuestion, explainCharge, recommendCheckout, type CardCtx, type ChargeCtx } from "./ai.js";
 import { geminiConfigured, modelChain } from "./gemini.js";
 import { id, load, save, sha256, syntheticHistory, type Alert, type Card, type Charge, type State } from "./store.js";
 import {
   chargeVaultedCard, createPaymentToken, createSetupToken, deletePaymentToken, getPaymentToken,
-  listPaymentTokens, paypalConfigured, pingPayPal, type ApiCall, type Rec,
+  listPaymentTokens, paypalConfigured, pingPayPal, type ApiCall, type Rec, type TestCard,
 } from "./paypal.js";
+import { buildSmartCheckout, optionDef, PURCHASE, type PaymentOptionDef } from "./smart-checkout.js";
 
 const app = express();
 app.use(express.json());
@@ -42,7 +43,7 @@ app.get("/api/status", async (_req, res) => {
   const ping = cfg.ok ? await pingPayPal() : { ok: false, error: cfg.reason };
   const s = load();
   res.json({ paypal: { configured: cfg.ok, authOk: ping.ok, error: ping.error, env: "sandbox" }, keyring: s.keyring ? { handle: s.keyring.handle, createdAt: s.keyring.createdAt } : null,
-    merchants: MERCHANTS.map(({ testCard, ...m }) => ({ ...m, testCardLast4: testCard.number.slice(-4) })), model: { ...modelInfo, metrics }, ai: { provider: "google-gemini", configured: geminiConfigured(), models: modelChain() }, alerts: { threshold: ALERT_THRESHOLD } });
+    merchants: MERCHANTS.map(({ testCard, ...m }) => ({ ...m, testCardLast4: testCard.number.slice(-4) })), model: { ...modelInfo, metrics }, ai: { provider: "google-gemini", configured: geminiConfigured(), models: modelChain() }, alerts: { threshold: ALERT_THRESHOLD }, shop: { buttonLabel: PURCHASE.buttonLabel, amount: PURCHASE.amount, merchantName: PURCHASE.merchantName, productName: PURCHASE.productName, disclaimer: PURCHASE.disclaimer } });
 });
 
 app.post("/api/keyring", (_req, res) => {
@@ -132,6 +133,111 @@ app.post("/api/merchants/:mid/charge", async (req, res) => {
   save(s);
   if (alert) { broadcast("alert", { alert: alertView(alert), unread: unreadCount(s) }); void attachAlertExplanation(alert.id, req.body?.testForceAiFallback === true); }
   res.status(ch.status === "blocked" ? 403 : 200).json({ charge: ch, alertId: alert?.id ?? null });
+});
+
+// ---------- smart checkout (Maison Vale Boutique) ----------
+app.get("/api/smart-checkout", (_req, res) => {
+  res.json(buildSmartCheckout());
+});
+
+app.post("/api/smart-checkout/recommend", requireKey, async (req, res) => {
+  const quote = buildSmartCheckout();
+  const recommendation = await recommendCheckout(quote, { forceFallback: req.body?.forceFallback === true });
+  res.json({ recommendation, executed: false });
+});
+
+/** Vault (or reuse) a boutique payment method. Bank transfer is a labeled local simulation. */
+async function ensureBoutiquePayment(s: State, def: PaymentOptionDef): Promise<{ card: Card; hardFail?: { status: number; body: unknown } }> {
+  const existing = s.cards.find((c) => c.merchantId === MAISON_VALE.id && c.paymentOptionId === def.id && !c.revokedAt);
+  if (existing) return { card: existing };
+  const prior = s.cards.find((c) => c.merchantId === MAISON_VALE.id && c.vaultCustomerId);
+  const vaultCustomerId = prior?.vaultCustomerId || `kr-${MAISON_VALE.id.slice(0, 6)}-${s.keyring!.handle.slice(4, 14)}`;
+  const card: Card = {
+    id: id("card"), merchantId: MAISON_VALE.id, vaultCustomerId,
+    brand: def.brand, last4: def.last4, expiry: def.testCard?.expiry || "",
+    source: def.simulated ? "simulated" : "paypal_vault",
+    simulatedReason: def.simulatedReason,
+    tokenCreatedAt: now(), storySavedAt: now(), locked: false,
+    paymentOptionId: def.id, productName: def.productName,
+    paymentTokenId: def.simulated ? `sim_${crypto.randomBytes(6).toString("hex")}` : undefined,
+  };
+  if (def.simulated || !def.testCard) { s.cards.push(card); return { card }; }
+  const testCard: TestCard = def.testCard;
+  const st = log(s, await createSetupToken(vaultCustomerId, testCard));
+  let fail: Rec | undefined = st.ok ? undefined : st;
+  if (st.ok) {
+    const pt = log(s, await createPaymentToken(st.data.id));
+    if (pt.ok) {
+      card.paymentTokenId = pt.data.id;
+      card.vaultCustomerId = pt.data.customer?.id || vaultCustomerId;
+      card.brand = pt.data.payment_source?.card?.brand || def.brand;
+      card.last4 = pt.data.payment_source?.card?.last_digits || def.last4;
+      card.tokenCreatedAt = pt.data.create_time || card.tokenCreatedAt;
+    } else fail = pt;
+  }
+  if (fail) {
+    if (!isPermissionFailure(fail)) {
+      return { card, hardFail: { status: 502, body: { error: `PayPal vault call failed: ${fail.log.op} ${fail.log.httpStatus ?? ""} ${fail.log.error}`, apiCall: fail.log } } };
+    }
+    card.source = "simulated";
+    card.simulatedReason = `${fail.log.method} ${fail.log.path} -> ${fail.log.httpStatus ?? "no response"}: ${fail.log.error}`;
+    card.paymentTokenId = `sim_${crypto.randomBytes(6).toString("hex")}`;
+  }
+  s.cards.push(card);
+  return { card };
+}
+
+app.post("/api/smart-checkout/pay", requireKey, async (req, res) => {
+  if (req.body?.confirmedLegitimate !== true) return res.status(400).json({ error: "Confirm the purchase is legitimate to continue." });
+  const def = optionDef(String(req.body?.optionId || ""));
+  if (!def) return res.status(400).json({ error: "Select a payment option." });
+  const s = load();
+  const quote = buildSmartCheckout();
+  const opt = quote.options.find((o) => o.id === def.id)!;
+  const amount = quote.purchase.amount;
+  const m = MAISON_VALE;
+  const ensured = await ensureBoutiquePayment(s, def);
+  if (ensured.hardFail) { save(s); return res.status(ensured.hardFail.status).json(ensured.hardFail.body); }
+  const card = ensured.card;
+  const description = `${m.name}: ${quote.purchase.productName} (${def.productName})`.slice(0, 120);
+  const ch: Charge = {
+    id: id("chg"), cardId: card.id, merchantId: m.id, amount, description, at: now(),
+    source: def.simulated ? "simulated" : (card.source === "paypal_vault" ? "paypal_sandbox" : "simulated"),
+    status: "completed", recurring: false, userConfirmedLegitimate: true, paymentOptionId: def.id,
+    simulatedReason: def.simulated ? def.simulatedReason : (card.source === "simulated" ? card.simulatedReason : undefined),
+  };
+
+  if (card.revokedAt) {
+    ch.status = "blocked";
+    ch.blockedReason = `Blocked: you revoked this card at ${m.name} on ${new Date(card.revokedAt).toLocaleString("en-US", { timeZone: "America/New_York" })} ET. The saved card no longer exists in the PayPal vault.`;
+    if (card.source === "paypal_vault" && card.paymentTokenId) {
+      const r = log(s, await chargeVaultedCard({ vaultId: card.paymentTokenId, amount, description, merchant: m.name, recurring: false }));
+      ch.paypalRejection = r.log;
+      if (r.ok) ch.blockedReason += " WARNING: PayPal accepted the deleted token.";
+    }
+  } else if (card.locked) {
+    ch.status = "blocked";
+    ch.blockedReason = `Blocked: you locked this card at ${m.name}. Keyring stopped the charge before it reached PayPal. Unlock it in your Keyring to allow charges again.`;
+  } else if (def.simulated) {
+    ch.source = "simulated";
+    ch.simulatedReason = def.simulatedReason;
+  } else if (card.source === "paypal_vault" && card.paymentTokenId) {
+    const r = log(s, await chargeVaultedCard({ vaultId: card.paymentTokenId, amount, description, merchant: m.name, recurring: false }));
+    if (r.ok) { ch.orderId = r.data.id; ch.captureId = r.data.purchase_units?.[0]?.payments?.captures?.[0]?.id; if (r.data.status !== "COMPLETED") ch.error = `Order status ${r.data.status}`; }
+    else if (isPermissionFailure(r)) { ch.source = "simulated"; ch.error = `Simulated: ${r.log.method} ${r.log.path} -> ${r.log.httpStatus}: ${r.log.error}`; ch.simulatedReason = ch.error; }
+    else { ch.status = "failed"; ch.error = r.log.error; }
+  }
+
+  ch.recognition = recognize(ch, card, s.charges);
+  if (ch.recognition) {
+    ch.recognition.facts.push("You confirmed this purchase is legitimate at checkout, so Keyring did not raise an alert.");
+    ch.recognition.suggestion = "You confirmed this was you. No action needed.";
+  }
+  s.charges.push(ch);
+  const alert = maybeCreateAlert(s, ch, card);
+  save(s);
+  if (alert) { broadcast("alert", { alert: alertView(alert), unread: unreadCount(s) }); void attachAlertExplanation(alert.id, req.body?.testForceAiFallback === true); }
+  res.status(ch.status === "blocked" ? 403 : 200).json({ charge: ch, option: opt, alertId: alert?.id ?? null, benefits: opt.benefits });
 });
 
 // ---------- customer side (requires the key) ----------
@@ -249,7 +355,7 @@ function cardCtx(s: State, c: Card): CardCtx {
 }
 function chargeCtx(ch: Charge): ChargeCtx {
   return { id: ch.id, cardId: ch.cardId, merchant: merchantById(ch.merchantId)?.name ?? ch.merchantId, amount: ch.amount, description: ch.description, at: fmtET(ch.at), status: ch.status,
-    blockedReason: ch.blockedReason, recognizer: ch.recognition ? { looksLikeYouPct: Math.round(ch.recognition.looksLikeYou * 100), verdict: ch.recognition.verdict, headline: ch.recognition.headline } : undefined };
+    blockedReason: ch.blockedReason, userConfirmedLegitimate: ch.userConfirmedLegitimate, recognizer: ch.recognition ? { looksLikeYouPct: Math.round(ch.recognition.looksLikeYou * 100), verdict: ch.recognition.verdict, headline: ch.recognition.headline } : undefined };
 }
 
 /** Gemini explanation of one charge. Cached on the charge; ?refresh=1 (or body.refresh) asks again. Template fallback is labeled. */
@@ -297,6 +403,7 @@ const alertView = (a: Alert) => ({ ...a, ai: a.ai ? { ...a.ai, attempts: a.ai.at
 /** Only charges that actually went through are alerted (a blocked charge already didn't reach you). Synthetic history never alerts. */
 function maybeCreateAlert(s: State, ch: Charge, card: Card): Alert | null {
   if (ch.status !== "completed" || ch.source === "synthetic_history" || !ch.recognition) return null;
+  if (ch.userConfirmedLegitimate) return null; // cardholder already confirmed this purchase is legitimate at checkout
   if (ch.recognition.looksLikeYou >= ALERT_THRESHOLD) return null;
   const m = merchantById(ch.merchantId)!;
   const a: Alert = { id: id("alert"), chargeId: ch.id, cardId: card.id, merchantId: m.id, merchantName: m.name, amount: ch.amount, description: ch.description,

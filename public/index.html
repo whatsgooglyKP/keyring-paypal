@@ -22,9 +22,9 @@
   <div class="top-right">
     <span id="ppStatus" class="pill">PayPal sandbox: checking…</span>
     <span id="keyStatus" class="pill">No key yet</span>
-    <button id="enableNotif" class="ghost small-btn" hidden>Enable desktop alerts</button>
-    <button id="bell" class="ghost bell" aria-label="Alerts, 0 unread" title="Suspicious-charge alerts" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg><span id="bellCount" class="bell-count" hidden>0</span></button>
-    <button id="reset" class="ghost danger">Reset demo</button>
+    <button id="enableNotif" class="secondary small-btn" hidden>Enable desktop alerts</button>
+    <button id="bell" class="secondary bell" aria-label="Alerts, 0 unread" title="Suspicious-charge alerts" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1z"/></svg> Alerts<span id="bellCount" class="bell-count" hidden>0</span></button>
+    <button id="reset" class="bad">Reset demo</button>
   </div>
 </header>
 <div id="alertBanner" class="alert-banner" role="alert" aria-live="assertive" hidden></div>
@@ -40,6 +40,18 @@
       <div class="btns"><button id="createKey" class="primary">Create my key</button></div>
     </div>
     <div id="keyInfo" class="keybox" hidden></div>
+  </section>
+
+
+  <section class="panel shop-panel" id="shopPanel">
+    <div class="shop-intro">
+      <div>
+        <p class="shop-kicker">Smart checkout</p>
+        <h2>Shop a designer dress at Maison Vale Boutique</h2>
+        <p>Atelier silk midi dress · <b>$2,450.00</b>. You've confirmed this purchase is legitimate. At the point of purchase, pick one of three payment options — airline miles, cash back, or the cheapest transfer — each with a computed benefit underneath.</p>
+      </div>
+      <button id="openShop" class="primary shop-btn" disabled>Shop: designer dress ($2,450)</button>
+    </div>
   </section>
 
   <section class="panel">
@@ -62,7 +74,7 @@
           <span class="pp-powered-label">Vaulted with</span>
           <img src="/marks/pp_cc_mark_74x46.jpg" width="74" height="46" alt="PayPal Acceptance Mark">
         </a>
-        <div class="btns"><button id="verify" class="ghost">Check with PayPal vault</button></div>
+        <div class="btns"><button id="verify" class="secondary">Check with PayPal vault</button></div>
       </div>
     </div>
     <div id="cards" class="table"></div>
@@ -94,6 +106,7 @@
 
 <div id="drawer" class="drawer" hidden><div class="backdrop" data-close></div><div class="drawer-body"><button class="close" data-close aria-label="Close">×</button><div id="drawerContent"></div></div></div>
 <div id="modal" class="modal" hidden><div class="backdrop" data-close></div><div class="modal-body"><button class="close" data-close aria-label="Close">×</button><div id="modalContent"></div></div></div>
+<div id="shopModal" class="modal shop-modal" hidden><div class="backdrop" data-close></div><div class="modal-body shop-body"><button class="close" data-close aria-label="Close">×</button><div id="shopContent"></div></div></div>
 <script src="/app.js" type="module"></script>
 </body>
 </html>

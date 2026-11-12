@@ -10,7 +10,7 @@
 - Everyone who visits shares **one demo**. The demo is wiped whenever the site restarts or redeploys. Click **Reset demo** in the header to start fresh.
 - If Gemini's free daily quota runs out, explanations switch to the labeled template fallback. The ML score, the alerts, and every PayPal call still work.
 
-Walkthrough: **Create my key** → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge (the gym's $249 fee raises an alert by itself) → open a charge for Gemini's explanation and ask "Should I lock this card?" → **Lock** the gym card and watch its next charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → PayPal refuses the deleted token (`403`). The full step-by-step is under [Run it locally](#run-it-locally).
+Walkthrough: **Create my key** → **Shop: designer dress ($2,450)** at Maison Vale Boutique (pick airline miles, $500 cash back, or a $0-fee bank transfer) → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge (the gym's $249 fee raises an alert by itself) → open a charge for Gemini's explanation and ask "Should I lock this card?" → **Lock** the gym card and watch its next charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → PayPal refuses the deleted token (`403`). The full step-by-step is under [Run it locally](#run-it-locally).
 
 ## The problem
 
@@ -30,6 +30,7 @@ PayPal-branded checkout gives customers a wallet with visibility and protection.
 4. **Revoke** (permanent): deletes the saved card from that merchant's PayPal vault. Consent is required for every action: revoke is a two-step intent → confirm, it warns when an active subscription depends on the card (and says plainly that revoking does *not* cancel the subscription), and it needs an explicit acknowledgement in that case. Every lock, unlock, and revoke is recorded as a consent record. Keyring never revokes, merges, or deletes anything on its own.
 5. **Proactive alerts.** A new charge that doesn't look like you raises an alert on its own: a banner, a bell with an unread count, and an optional desktop notification, with Gemini's explanation and one-tap Lock / Revoke / This was me buttons. Nothing runs until you confirm. See [Alerts](#alerts).
 6. **AI charge recognizer.** For "I don't recognize this charge", it explains the charge in plain language (which merchant, when you saved the card there, whether it fits your subscription's amount and cycle, how it compares with your usual amount there, dormancy, test-charge size, bursts) and scores **"looks like you"** from 1–99%, with the model's top reasons. **Google Gemini** then explains the charge in 2–3 plain-English sentences, recommends one action (keep / lock / revoke / dispute), and answers follow-up questions in an **"Ask about this charge"** box. See [AI: ML scores, Gemini explains](#ai-ml-scores-gemini-explains).
+7. **Smart checkout.** A $2,450.00 designer dress at Maison Vale Boutique (a purchase you have confirmed is legitimate) lets you choose how to pay: a travel-rewards card that earns airline miles, a cash-back card, or a $0-fee bank transfer, each with a benefit calculated from example reward rules. See [Smart checkout](#smart-checkout).
 
 ## How it uses PayPal APIs (all real sandbox calls)
 
@@ -53,6 +54,7 @@ Each demo merchant gets its own vault `customer.id` (for example `kr-stream-…`
 | Vault list/get verification | **Lock** is enforced by Keyring before calling PayPal. A real lock needs PayPal-side enforcement at authorization. |
 | Revoke = real token delete, verified by 404 and by PayPal refusing to charge it | The key is a bearer secret in the browser. Production would use a passkey (WebAuthn) signature per action. |
 | Gemini explanations and answers are live calls to the Gemini API | The recognizer's model is trained on **synthetic** data. If Gemini is unavailable, the labeled deterministic template is shown instead. |
+| Smart-checkout card payments (travel and cash-back options) are vaulted and charged through the same sandbox Orders v2 `vault_id` path | The Harbor Checking **bank transfer (ACH)** is a labeled simulation — PayPal sandbox has no ACH vault path in this demo. Reward terms are fictional example rates, clearly labeled "not real card terms." |
 
 If a vault call ever fails with an auth or permission error (for example, vaulting not enabled on the app), Keyring saves that card as a clearly labeled **simulated** card and records the exact failing call and error on the card (`simulatedReason`). In the current sandbox app every call works, so nothing is simulated.
 
@@ -122,7 +124,27 @@ Other rules:
 
 If a Gemini model's daily free-tier quota runs out, Keyring skips that model until Google's retry time passes, instead of retrying it on every request.
 
+## Smart checkout
+
+At **Maison Vale Boutique**, a fictional designer shop, you can buy an Atelier silk midi dress for **$2,450.00** — a high-value purchase you have confirmed is legitimate. Click **Shop: designer dress ($2,450)** (after creating your key). At the point of purchase you see three selectable payment options, each with a short benefit calculated in code from per-option reward and fee rules (not hardcoded strings). Product names are fictional. The page is labeled **"Example reward terms (sandbox demo), not real card terms."**
+
+| Option | Example product (fictional) | How the benefit is computed on $2,450.00 |
+|---|---|---|
+| Travel rewards card | Northstar Voyager Visa | 4× airline miles × $2,450.00 = 9,800 miles + 200 Atelier travel promo bonus = **10,000 miles**, estimated value **$150.00** at $0.015/mile (1.5 cents) |
+| Cash-back card | Cedar Ledger Mastercard | 5% × $2,450.00 = $122.50 + $377.50 limited-time Atelier cash-back promo = **$500.00 cash back** |
+| Cheapest transfer | Harbor Checking (ACH) | **$0.00 fee**, the lowest-cost way to move the money. Saves **$71.35** vs paying by card (2.9% + $0.30 = $71.35) |
+
+A compact **cheapest transfer** comparison lists the fee for card-to-card (3% = $73.50), card-to-merchant (2.9% + $0.30 = $71.35), bank-to-card (1.5% = $36.75), and bank-to-merchant ACH ($0.00), and highlights the cheapest.
+
+Selecting an option and clicking **Confirm purchase · $2,450.00**:
+
+- For a vaulted card, Keyring saves that card in Maison Vale's own PayPal vault (setup token → payment token) on first use, then charges it with Orders v2 and the card's `vault_id`, the same path as the other demo merchants.
+- For Harbor Checking, the transfer is a **labeled simulation**.
+- The charge is marked **user-confirmed legitimate**, so the recognizer may still score it (a $2,450 first purchase is unusual) but Keyring **does not raise a suspicious-charge alert**, and the charge is not blocked.
+- Gemini (or the labeled template) recommends the highest-dollar-benefit option in one grounded sentence — $500.00 cash back beats 10,000 miles (est. $150.00) and the $71.35 you save with a $0-fee transfer. Invented dollar amounts are rejected; every figure has to appear in the computed facts. **Reset demo** still clears these cards and charges, including any sandbox tokens Keyring created for the boutique.
+
 ## Run it locally
+
 
 The [live demo](#try-it-live) is the quickest way to try Keyring. To run your own copy with your own PayPal sandbox app, you need Node 20+.
 
@@ -135,18 +157,19 @@ npm run screenshots         # optional: headless Chromium screenshots into scree
 python3 -m pip install -r requirements.txt && npm run train   # optional: retrain the model
 ```
 
-The demo: **Create my key** → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge (the gym's $249 fee pops up an alert by itself, while the StreamCo+ renewal doesn't) → click a charge to open the recognizer and Gemini's explanation → ask "Should I lock this card?" → **Lock** the gym card and watch its charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → its next renewal is blocked and PayPal refuses the deleted token. **Reset demo** deletes the demo's remaining sandbox tokens.
+The demo: **Create my key** → **Shop: designer dress ($2,450)** (pick a payment option and confirm) → **Save card at checkout** at each merchant → **Check with PayPal vault** → have merchants charge (the gym's $249 fee pops up an alert by itself, while the StreamCo+ renewal doesn't) → click a charge to open the recognizer and Gemini's explanation → ask "Should I lock this card?" → **Lock** the gym card and watch its charge get blocked → **Revoke** the StreamCo+ card (subscription warning) → its next renewal is blocked and PayPal refuses the deleted token. **Reset demo** deletes the demo's remaining sandbox tokens.
 
 ## Project layout
 
 ```
-src/server.ts      Express API: key, merchant save/charge, customer list/lock/revoke/verify, recognizer, alerts + SSE stream
+src/server.ts      Express API: key, merchant save/charge, smart checkout, customer list/lock/revoke/verify, recognizer, alerts + SSE stream
 src/paypal.ts      Sandbox REST client (OAuth, v3 vault, Orders v2), every call logged without secrets
 src/recognizer.ts  Feature building, scoring, deterministic facts + template explanation
 src/ai.ts          Gemini prompts, response schemas, grounding checks, template fallback
 src/gemini.ts      Gemini REST client: timeout, retry on 429/503, model fallback
 src/model.ts       Loads model/keyring_model.json; must match scripts/train_model.py
-src/merchants.ts   Demo merchants and PayPal sandbox test cards
+src/merchants.ts   Demo merchants and PayPal sandbox test cards (Maison Vale Boutique is used by smart checkout)
+src/smart-checkout.ts  Purchase, fictional reward rules, and computed benefits / transfer fees
 src/store.ts       JSON state in data/ (git-ignored) and the synthetic history generator
 public/            Static UI
 scripts/           train_model.py, smoke.mjs, screenshots.mjs
@@ -155,18 +178,20 @@ scripts/           train_model.py, smoke.mjs, screenshots.mjs
 
 ## Branding
 
-Keyring is its own product. The name, key wordmark, and layout are Keyring's — not a PayPal login or official PayPal product. Accents use official PayPal blues; PayPal marks appear only as official, unmodified assets on a white background, with the required trademark notice.
+Keyring is its own product. The name, key wordmark, and layout are Keyring's — not a PayPal login or official PayPal product. The UI is a white canvas with dark navy lettering and official PayPal blues (`#003087`, `#0070E0`) for the color feel only. PayPal marks appear only as official, unmodified assets on a white background, with the required trademark notice.
 
 **Colors** (UI accents only; from PayPal's [Brand Identity Quick Guide, 2022](https://filecache.mediaroom.com/mr5mr_paypal/184713/download/PP_Brand%20Guidelines_Newsroom_2022.pdf) on the [PayPal Newsroom media resources](https://newsroom.paypal-corp.com/media-resources) site):
 
 | Token | Hex | Role in Keyring |
 |---|---|---|
-| Left Blue | `#003087` | Primary-button hover, deep accent |
-| Middle Blue | `#001C64` | Panel depth |
-| Right Blue | `#0070E0` | Primary buttons and Keyring's accent |
-| Slate | `#001435` | Page background |
-| Off-white | `#FAF8F5` | Body text |
-| Serenity Blue | `#E5F0FA` | Hero supporting text |
+| White | `#FFFFFF` | Page and panel background |
+| Left Blue | `#003087` | Headings, wordmark, secondary buttons, selected-option borders, primary-button hover |
+| Middle Blue | `#001C64` | Secondary-button hover |
+| Right Blue | `#0070E0` | Primary actions (solid filled buttons) and accent |
+| Slate | `#001435` | Body lettering |
+| Muted navy | `#3A4F6A` | Supporting text (WCAG AA on white) |
+| Serenity Blue | `#E5F0FA` | Selected payment-option fill, recommendation panel |
+| Off-white | `#FAF8F5` | Reserved (PayPal off-white, used in marks lockups) |
 | Gold | `#FFD140` | Reserved (not used as a chrome color) |
 
 **Marks** (exact copies in `public/marks/`; source URLs in `public/marks/SOURCES.txt`):

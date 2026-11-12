@@ -3,7 +3,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const TZ = "America/New_York";
 const fmt = (iso) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: TZ }) + " ET";
 const fmtD = (iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: TZ });
-const money = (n) => `$${Number(n).toFixed(2)}`;
+const money = (n) => { const [d, c] = Number(n).toFixed(2).split("."); return `$${d.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${c}`; };
 const VERDICT = { LOOKS_LIKE_YOU: "Looks like you", NOT_SURE: "Not sure", DOESNT_LOOK_LIKE_YOU: "Doesn't look like you" };
 
 let status = null;
@@ -41,14 +41,16 @@ function renderKey() {
   if (has) { info.hidden = false; info.innerHTML = `<span class="muted small">Public handle (what merchants see):</span><code>${esc(handle())}</code><span class="muted small">Secret key: stored only in this browser · server keeps a SHA-256 hash</span>`; }
   else if (status.keyring) { info.hidden = false; info.innerHTML = `<span class="muted">A key exists but isn't in this browser. Reset the demo to start over.</span>`; }
   else info.hidden = true;
+  const shop = $("#openShop");
+  if (shop) { shop.disabled = !has; shop.title = has ? "Open smart checkout for the $2,450 designer dress" : "Create your key first"; }
 }
 
 function renderMerchants() {
   $("#merchants").innerHTML = status.merchants.map((m) => `
     <div class="merchant" data-m="${m.id}">
       <div><b>${m.emoji} ${esc(m.name)}</b><div class="cat">${esc(m.category)}${m.subscription ? ` · ${esc(m.subscription.plan)} ${money(m.subscription.amount)}/${m.subscription.intervalDays}d` : ""}</div></div>
-      <button class="primary" data-save="${m.id}" ${key() ? "" : "disabled"}>Save card at checkout (•••• ${m.testCardLast4})</button>
-      <div class="presets">${m.presets.map((p, i) => `<button class="ghost" data-charge="${m.id}" data-i="${i}" ${key() ? "" : "disabled"}>Merchant charges: ${esc(p.label)}</button>`).join("")}</div>
+      <button class="primary" data-save="${m.id}" ${key() ? "" : "disabled"} title="${key() ? "Save this card in the merchant's PayPal vault" : "Create your key first"}">Save card at checkout (•••• ${m.testCardLast4})</button>
+      <div class="presets">${m.presets.map((p, i) => `<button class="secondary" data-charge="${m.id}" data-i="${i}" ${key() ? "" : "disabled"} title="${key() ? esc(p.hint || p.label) : "Create your key first"}">Merchant charges: ${esc(p.label)}</button>`).join("")}</div>
       <div class="pp-accept"><img src="/marks/pp_cc_mark_37x23.jpg" width="37" height="23" alt="PayPal Acceptance Mark"></div>
     </div>`).join("");
 }
@@ -68,14 +70,14 @@ function renderCards(cards) {
   $("#cards").innerHTML = `<div class="row h"><span>Merchant</span><span>Card</span><span>Saved</span><span>Last charge</span><span>Subscription</span><span>Status</span><span>Actions</span></div>` +
     cards.map((c) => `<div class="row ${c.status}" data-card="${c.id}">
       <span>${c.merchant.emoji} <b>${esc(c.merchant.name)}</b><div class="m">${esc(c.merchant.category)}</div></span>
-      <span>${esc(c.brand)} •••• ${esc(c.last4)}<div><span class="src ${c.source === "paypal_vault" ? "real" : "sim"}" title="${esc(c.simulatedReason || c.paymentTokenId || "")}">${c.source === "paypal_vault" ? "PayPal vault token" : "simulated"}</span></div>${c.vaultCheck ? `<div class="m">${c.vaultCheck.listed ? "✓ in PayPal vault" : "✗ not in vault"} (${esc(c.vaultCheck.via)})</div>` : ""}</span>
+      <span>${c.productName ? `<div><b>${esc(c.productName)}</b></div>` : ""}${esc(c.brand)} •••• ${esc(c.last4)}<div><span class="src ${c.source === "paypal_vault" ? "real" : "sim"}" title="${esc(c.simulatedReason || c.paymentTokenId || "")}">${c.source === "paypal_vault" ? "PayPal vault token" : "simulated"}</span></div>${c.vaultCheck ? `<div class="m">${c.vaultCheck.listed ? "✓ in PayPal vault" : "✗ not in vault"} (${esc(c.vaultCheck.via)})</div>` : ""}</span>
       <span>${fmtD(c.storySavedAt)}<div class="m" title="Real PayPal create_time of the sandbox token">token ${fmtD(c.tokenCreatedAt)}</div></span>
       <span>${c.lastCharge ? `${money(c.lastCharge.amount)}<div class="m">${fmtD(c.lastCharge.at)}</div>` : "—"}</span>
       <span>${c.activeSubscription ? `<span class="sub">● Active ${money(c.activeSubscription.amount)}/${c.activeSubscription.intervalDays}d</span>` : `<span class="m">None</span>`}</span>
       <span><span class="status ${c.status}">${c.status}</span></span>
       <span class="btns">${c.status === "revoked" ? `<span class="m">Revoked ${fmtD(c.revokedAt)}</span>` : `
-        <button class="ghost" data-lock="${c.id}" data-locked="${c.locked}">${c.locked ? "Unlock" : "Lock"}</button>
-        <button class="ghost danger" data-revoke="${c.id}">Revoke</button>`}</span>
+        <button class="secondary" data-lock="${c.id}" data-locked="${c.locked}">${c.locked ? "Unlock" : "Lock"}</button>
+        <button class="bad" data-revoke="${c.id}">Revoke</button>`}</span>
     </div>`).join("");
 }
 
@@ -88,7 +90,7 @@ function renderCharges(charges) {
       <span class="m">${fmt(c.at)}</span><span>${esc(c.merchantName)}<div class="m">${esc(c.description)}</div></span><span>${money(c.amount)}</span>
       <span><span class="status ${c.status}">${c.status}</span></span>
       <span>${c.verdict ? `<span class="badge ${c.verdict}">${VERDICT[c.verdict]} · ${Math.round(c.looksLikeYou * 100)}%</span>` : `<span class="m">Explain →</span>`}</span>
-      <span>${c.source === "paypal_sandbox" ? `<span class="src real">PayPal ${esc(c.orderId || "")}</span>` : c.source === "simulated" ? `<span class="src sim">simulated</span>` : `<span class="src">synthetic history</span>`}</span>
+      <span>${c.source === "paypal_sandbox" ? `<span class="src real">PayPal ${esc(c.orderId || "")}</span>` : c.source === "simulated" ? `<span class="src sim">simulated</span>` : `<span class="src">synthetic history</span>`}${c.userConfirmedLegitimate ? ` <span class="src legit">Confirmed legitimate</span>` : ""}</span>
     </div>`).join("") + (hidden > 0 ? `<p class="muted small">+ ${hidden} older synthetic-history charges (baseline for the recognizer).</p>` : "");
 }
 
@@ -105,7 +107,7 @@ async function openCharge(id) {
       <div id="aiExplain" class="ai loading"><span class="ai-src">Asking Gemini…</span><p class="muted">Writing a plain-English explanation from the facts below.</p></div></div>
     <div class="card ask"><h3>Ask about this charge</h3>
       <form id="askForm" data-charge="${esc(c.id)}"><input id="askInput" maxlength="500" placeholder="e.g. Why did ${esc(card.merchant.name)} charge me?" autocomplete="off"><button class="primary" type="submit">Ask</button></form>
-      <div class="chips"><button class="ghost chip" data-q="Why did ${esc(card.merchant.name)} charge me?">Why did ${esc(card.merchant.name)} charge me?</button><button class="ghost chip" data-q="Should I lock this card?">Should I lock this card?</button><button class="ghost chip" data-q="What happens to my subscription if I revoke this card?">What if I revoke it?</button></div>
+      <div class="chips"><button class="secondary chip" data-q="Why did ${esc(card.merchant.name)} charge me?">Why did ${esc(card.merchant.name)} charge me?</button><button class="secondary chip" data-q="Should I lock this card?">Should I lock this card?</button><button class="secondary chip" data-q="What happens to my subscription if I revoke this card?">What if I revoke it?</button></div>
       <div id="askOut"></div></div>
     <div class="card"><h3>What we know</h3><ul>${g.facts.map((f) => `<li>${esc(f)}</li>`).join("")}</ul></div>
     <div class="card"><h3>Model's top reasons</h3><ul>${g.topReasons.map((t) => `<li>${t.direction === "you" ? "✓ looks like you" : "⚠ not like you"}: ${esc(t.label)} <span class="m">(${t.impact > 0 ? "+" : ""}${t.impact})</span></li>`).join("") || "<li>No strong signals.</li>"}</ul>
@@ -116,7 +118,7 @@ async function openCharge(id) {
       <span>Vault token</span><span class="mono">${esc(card.paymentTokenId)}</span>
       <span>PayPal order</span><span class="mono">${esc(c.orderId || "—")} ${c.captureId ? `/ capture ${esc(c.captureId)}` : ""}</span>
       <span>Status</span><span>${esc(card.status)}</span></div>
-      ${card.status === "active" ? `<div class="btns" style="margin-top:10px"><button class="ghost" data-lock="${card.id}" data-locked="false">Lock this card</button><button class="ghost danger" data-revoke="${card.id}">Revoke this card</button></div>` : ""}
+      ${card.status === "active" ? `<div class="btns" style="margin-top:10px"><button class="secondary" data-lock="${card.id}" data-locked="false">Lock this card</button><button class="bad" data-revoke="${card.id}">Revoke this card</button></div>` : ""}
     </div>`;
   $("#drawerContent").dataset.view = "charge";
   $("#drawer").hidden = false;
@@ -130,7 +132,7 @@ function actionButton(action, card) {
   if (!card || !action || action === "none") return "";
   if (action === "keep") return `<div class="m">Suggested: keep it. No action needed.</div>`;
   if (action === "dispute") return `<div class="m">Suggested: dispute it with your card issuer or through PayPal. Keyring doesn't file disputes for you.</div>`;
-  const attr = action === "revoke_card" ? `data-revoke="${esc(card.id)}" class="ghost danger"` : `data-lock="${esc(card.id)}" data-locked="${action === "unlock_card"}" class="ghost"`;
+  const attr = action === "revoke_card" ? `data-revoke="${esc(card.id)}" class="bad"` : `data-lock="${esc(card.id)}" data-locked="${action === "unlock_card"}" class="secondary"`;
   return `<div class="btns" style="margin-top:8px"><button ${attr}>${ACTION[action]}${card.merchant ? ` at ${esc(typeof card.merchant === "string" ? card.merchant : card.merchant.name)}` : ""}</button><span class="m" style="align-self:center">Suggested · you confirm</span></div>`;
 }
 
@@ -170,7 +172,7 @@ async function revokeCard(id) {
   $("#modalContent").innerHTML = `<h2 style="margin-top:0">Revoke this saved card?</h2>
     ${it.warnings.map((w) => `<div class="warn">${esc(w)}</div>`).join("")}
     ${it.requiresSubscriptionAck ? `<label class="ack"><input type="checkbox" id="ack"> I understand my subscription renewal will fail.</label>` : ""}
-    <div class="btns" style="margin-top:12px"><button class="bad" id="doRevoke" ${it.requiresSubscriptionAck ? "disabled" : ""}>Yes, revoke it</button><button class="ghost" data-close>Cancel</button></div>`;
+    <div class="btns" style="margin-top:12px"><button class="bad" id="doRevoke" ${it.requiresSubscriptionAck ? "disabled" : ""}>Yes, revoke it</button><button class="secondary" data-close>Cancel</button></div>`;
   $("#modal").hidden = false;
   $("#ack")?.addEventListener("change", (e) => { $("#doRevoke").disabled = !e.target.checked; });
   $("#doRevoke").onclick = async () => {
@@ -206,11 +208,11 @@ function alertHtml(a, where) {
   const open = a.status === "open";
   const btns = open ? `<div class="btns alert-actions">
       ${cardStatus === "active" ? `<button class="primary" data-lock="${esc(a.cardId)}" data-locked="false">Lock card</button>` : cardStatus === "locked" ? `<span class="status locked">card locked</span>` : ""}
-      ${cardStatus !== "revoked" ? `<button class="ghost danger" data-revoke="${esc(a.cardId)}">Revoke card</button>` : ""}
-      <button class="ghost" data-dismiss="${esc(a.id)}">This was me</button>
-      <button class="ghost" data-charge-id="${esc(a.chargeId)}">View charge</button>
+      ${cardStatus !== "revoked" ? `<button class="bad" data-revoke="${esc(a.cardId)}">Revoke card</button>` : ""}
+      <button class="secondary" data-dismiss="${esc(a.id)}">This was me</button>
+      <button class="secondary" data-charge-id="${esc(a.chargeId)}">View charge</button>
       ${where === "banner" ? `<span class="m">Nothing happens until you choose. Lock and revoke ask you to confirm.</span>` : ""}
-    </div>` : `<p class="resolved">✓ ${esc(RESOLUTION[a.resolution] || "Reviewed.")} <button class="ghost chip" data-charge-id="${esc(a.chargeId)}">View charge</button></p>`;
+    </div>` : `<p class="resolved">✓ ${esc(RESOLUTION[a.resolution] || "Reviewed.")} <button class="secondary chip" data-charge-id="${esc(a.chargeId)}">View charge</button></p>`;
   return `<div class="alert-item ${open ? "open" : "reviewed"}" data-alert="${esc(a.id)}">
     <div class="alert-title"><span class="alert-icon" aria-hidden="true">⚠</span><div><b>Suspicious charge: ${esc(a.merchantName)} charged ${money(a.amount)}</b>
       <div class="m">${esc(a.card)} · ${esc(fmt(a.chargeAt))} · ${esc(a.description)}</div></div></div>
@@ -240,7 +242,7 @@ function renderBanner() {
   const a = open[0];
   el.innerHTML = `<div class="alert-banner-inner"><button class="close" data-hide-banner="${esc(a.id)}" aria-label="Hide this banner (the alert stays in the bell)">×</button>
     <p class="alert-kicker">Keyring alert · new charge doesn't look like you</p>${alertHtml(a, "banner")}
-    ${open.length > 1 ? `<button class="ghost chip" data-open-alerts>+ ${open.length - 1} more open alert${open.length > 2 ? "s" : ""}</button>` : ""}</div>`;
+    ${open.length > 1 ? `<button class="secondary chip" data-open-alerts>+ ${open.length - 1} more open alert${open.length > 2 ? "s" : ""}</button>` : ""}</div>`;
   el.hidden = false;
 }
 
@@ -322,10 +324,116 @@ async function connectStream() {
 // Fallback: poll while the live stream is down.
 setInterval(() => { if (!streamLive && key()) loadAlerts(); }, 5000);
 
+
+// ---------- smart checkout (Maison Vale Boutique) ----------
+const $$all = (s) => document.querySelectorAll(s);
+
+function optionHtml(o) {
+  return `<label class="pay-option" data-option="${esc(o.id)}">
+      <input type="radio" name="shopPay" value="${esc(o.id)}" aria-label="${esc(o.productName)}">
+      <span class="pay-box" aria-hidden="true"></span>
+      <div class="pay-body">
+        <div class="pay-title"><b>${esc(o.productName)}</b> · ${esc(o.brand)} •••• ${esc(o.last4)}
+          ${o.simulated ? `<span class="src sim">simulated</span>` : `<span class="src real">PayPal vault</span>`}</div>
+        <div class="pay-headline">${esc(o.benefits.headline)}</div>
+        <p class="pay-math">${esc(o.benefits.math)}</p>
+        <p class="pay-fee">Transfer fee: ${esc(o.benefits.feeLabel)}</p>
+      </div>
+    </label>`;
+}
+
+function transferHtml(tr) {
+  const amount = status?.shop?.amount ?? 2450;
+  return `<div class="transfer-compare">
+    <h3>Cheapest transfer — fee to move ${money(amount)}</h3>
+    ${tr.routes.map((r) => `<div class="transfer-row${r.cheapest ? " cheapest" : ""}"><span>${esc(r.label)}${r.cheapest ? " · cheapest" : ""}</span><span>${money(r.fee)}</span><span class="m">${esc(r.math)}</span></div>`).join("")}
+    <p class="transfer-summary">${esc(tr.summary)}</p>
+  </div>`;
+}
+
+function bindShopSelection() {
+  const list = $("#shopContent .pay-list");
+  const confirm = $("#confirmShop");
+  if (!list || !confirm) return;
+  const sync = () => {
+    const sel = $("#shopContent input[name=shopPay]:checked");
+    confirm.disabled = !sel;
+    for (const lab of $$all("#shopContent .pay-option")) lab.classList.toggle("selected", !!lab.querySelector("input")?.checked);
+  };
+  list.addEventListener("change", sync);
+  list.addEventListener("click", (e) => { if (e.target.closest(".pay-option")) setTimeout(sync, 0); });
+}
+
+function renderShop(data, recommendation) {
+  const p = data.purchase;
+  const rec = recommendation || { source: "template", text: data.templateRecommendation };
+  const recSrc = rec.source === "gemini"
+    ? `<span class="ai-src gem">✦ Suggested by Gemini <span class="m">${esc(rec.model || "")}</span></span>`
+    : `<span class="ai-src tpl">Template recommendation</span>`;
+  $("#shopContent").innerHTML = `
+    <div class="dress-card">
+      <div class="dress-art" aria-hidden="true">${esc(p.emoji || "👗")}</div>
+      <div>
+        <p class="shop-kicker">${esc(p.merchantName)}</p>
+        <h2 style="margin:0">${esc(p.productName)}</h2>
+        <p class="dress-price">${money(p.amount)}</p>
+        <p class="legit">✓ You confirmed this purchase is legitimate.</p>
+      </div>
+    </div>
+    <p class="disclaimer">${esc(p.disclaimer || data.disclaimer)}</p>
+    <div class="pay-list" role="radiogroup" aria-label="Payment options">${data.options.map(optionHtml).join("")}</div>
+    ${transferHtml(data.transfer)}
+    <div class="recommend" id="shopRec">${recSrc}<p>${esc(rec.text)}</p></div>
+    <div class="shop-actions">
+      <button class="primary" id="confirmShop" disabled>Confirm purchase · ${money(p.amount)}</button>
+      <button class="secondary" data-close>Cancel</button>
+      <p class="m" id="shopHint" style="margin:0;flex:1;min-width:16em">Select a payment option, then confirm. Card payments go through the PayPal sandbox; the bank transfer is a labeled simulation.</p>
+    </div>`;
+  bindShopSelection();
+}
+
+async function openShop() {
+  if (!key()) return toast("Create your key first.", "err");
+  const r = await api("/api/smart-checkout");
+  if (!r.ok) return toast(esc(r.data.error || "Could not load checkout"), "err");
+  renderShop(r.data);
+  $("#shopModal").hidden = false;
+  const rec = await api("/api/smart-checkout/recommend", { method: "POST", body: {} });
+  const box = $("#shopRec");
+  if (box && rec.ok && rec.data.recommendation) {
+    const a = rec.data.recommendation;
+    const recSrc = a.source === "gemini"
+      ? `<span class="ai-src gem">✦ Suggested by Gemini <span class="m">${esc(a.model || "")}</span></span>`
+      : `<span class="ai-src tpl">Template recommendation</span>`;
+    box.innerHTML = `${recSrc}<p>${esc(a.text)}</p>`;
+  }
+}
+
+async function confirmShop(btn) {
+  const sel = $("#shopContent input[name=shopPay]:checked");
+  if (!sel) return toast("Select a payment option.", "err");
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = "Confirming purchase…";
+  const r = await api("/api/smart-checkout/pay", { method: "POST", body: { optionId: sel.value, confirmedLegitimate: true } });
+  btn.textContent = prev;
+  btn.disabled = false;
+  const c = r.data.charge;
+  if (!c) { toast(esc(r.data.error), "err"); return; }
+  if (c.status === "blocked") { toast(`⛔ ${esc(c.blockedReason)}`, "err"); $("#shopModal").hidden = true; return refresh(); }
+  const benefit = r.data.benefits?.headline || "";
+  const via = c.source === "paypal_sandbox"
+    ? `PayPal order <span class="mono">${esc(c.orderId || "")}</span>`
+    : `<b>Simulated</b>${c.simulatedReason ? `: ${esc(c.simulatedReason)}` : ""}`;
+  toast(`Maison Vale Boutique charged ${money(c.amount)} with ${esc(r.data.option?.productName || sel.value)} (${via}). Benefit: <b>${esc(benefit)}</b>. Recognizer: ${esc(c.recognition?.headline || "")} — you confirmed this is legitimate, so no alert was raised.`, c.status === "completed" ? "ok" : "err");
+  $("#shopModal").hidden = true;
+  return refresh();
+}
+
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("button,[data-charge-id],[data-close]");
   if (!t) return;
-  if (t.matches("[data-close]")) { $("#drawer").hidden = true; $("#modal").hidden = true; return; }
+  if (t.matches("[data-close]")) { $("#drawer").hidden = true; $("#modal").hidden = true; const sm = $("#shopModal"); if (sm) sm.hidden = true; return; }
   if (t.id === "bell" || t.matches("[data-open-alerts]")) return openAlerts();
   if (t.id === "enableNotif") { if ("Notification" in window) await Notification.requestPermission(); return renderBell(); }
   if (t.dataset.hideBanner) { hideBanner(t.dataset.hideBanner); return renderBanner(); }
@@ -335,6 +443,8 @@ document.addEventListener("click", async (e) => {
     else toast(esc(r.data.error), "err");
     return;
   }
+  if (t.id === "openShop") return openShop();
+  if (t.id === "confirmShop") return confirmShop(t);
   if (t.id === "createKey") {
     const r = await api("/api/keyring", { method: "POST" });
     if (!r.ok) return toast(esc(r.data.error), "err");
@@ -342,7 +452,7 @@ document.addEventListener("click", async (e) => {
     toast(`Key created. Handle <code>${esc(r.data.handle)}</code>. The secret is stored only in this browser.`, "ok");
     await loadStatus(); await refresh(); await loadAlerts({ initial: true }); connectStream(); return;
   }
-  if (t.id === "reset") { if (!confirm("Reset the demo? This deletes the demo's sandbox vault tokens and local data.")) return; await api("/api/demo/reset", { method: "POST" }); localStorage.clear(); sessionStorage.removeItem("keyring.hiddenBanners"); if (streamCtl) streamCtl.abort(); streamCtl = null; alerts = []; seenAlerts.clear(); $("#drawer").hidden = true; $("#toast").hidden = true; await loadStatus(); await refresh(); renderAlerts(); return; }
+  if (t.id === "reset") { if (!confirm("Reset the demo? This deletes the demo's sandbox vault tokens and local data.")) return; await api("/api/demo/reset", { method: "POST" }); localStorage.clear(); sessionStorage.removeItem("keyring.hiddenBanners"); if (streamCtl) streamCtl.abort(); streamCtl = null; alerts = []; seenAlerts.clear(); $("#drawer").hidden = true; $("#modal").hidden = true; const smR = $("#shopModal"); if (smR) smR.hidden = true; $("#toast").hidden = true; await loadStatus(); await refresh(); renderAlerts(); return; }
   if (t.id === "verify") { t.disabled = true; const r = await api("/api/key/verify", { method: "POST" }); t.disabled = false; toast(r.ok ? "Checked each merchant's PayPal vault." : esc(r.data.error), r.ok ? "ok" : "err"); return refresh(); }
   if (t.dataset.save) {
     t.disabled = true; t.textContent = "Saving with PayPal vault…";

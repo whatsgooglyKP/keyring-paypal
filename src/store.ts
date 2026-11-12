@@ -14,6 +14,8 @@ export interface Card {
   storySavedAt: string;        // backdated "saved" date for the demo story (synthetic)
   locked: boolean; lockedAt?: string; revokedAt?: string;
   vaultCheck?: { at: string; listed: boolean; via: "list" | "get" | "none"; note: string };
+  paymentOptionId?: string;  // smart-checkout option (travel / cashback / ach) when this card is a boutique payment method
+  productName?: string;      // fictional card product name (sandbox demo terms)
 }
 export interface Charge {
   id: string; cardId: string; merchantId: string; amount: number; description: string; at: string;
@@ -23,6 +25,9 @@ export interface Charge {
   paypalRejection?: ApiCall;    // proof: PayPal itself refusing a deleted token
   recognition?: Recognition;
   ai?: Explanation;              // cached Gemini (or template) explanation
+  userConfirmedLegitimate?: boolean;  // set when the cardholder confirmed the purchase is legitimate at checkout
+  paymentOptionId?: string;
+  simulatedReason?: string;      // labeled simulation (e.g. ACH bank transfer)
 }
 export interface Consent { id: string; action: "lock" | "unlock" | "revoke"; cardId: string; at: string; acknowledgedSubscription?: boolean; via: "keyring_key" }
 export interface Intent { id: string; cardId: string; action: "revoke"; expiresAt: number; warnings: string[]; requiresSubscriptionAck: boolean }

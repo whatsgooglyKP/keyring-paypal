@@ -42,4 +42,15 @@ export const MERCHANTS: Merchant[] = [
   },
 ];
 
-export const merchantById = (id: string) => MERCHANTS.find((m) => m.id === id);
+/**
+ * Fictional designer boutique used by Smart checkout. Not shown in the
+ * three-merchant demo grid; looked up through merchantById for charges.
+ */
+export const MAISON_VALE: Merchant = {
+  id: "maisonvale", name: "Maison Vale Boutique", category: "Designer fashion", emoji: "👗",
+  testCard: { number: "4111111111111111", expiry: "2030-12", name: "Demo Customer" },
+  history: { monthsAgoSaved: 0, pattern: "coffee", note: "One-off designer purchase. You confirmed this order is legitimate." },
+  presets: [{ label: "Atelier silk midi dress $2,450.00", amount: 2450, hint: "smart checkout" }],
+};
+
+export const merchantById = (id: string) => MERCHANTS.find((m) => m.id === id) ?? (id === MAISON_VALE.id ? MAISON_VALE : undefined);

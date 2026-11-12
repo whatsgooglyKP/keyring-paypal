@@ -163,6 +163,56 @@ await j("/api/demo/reset", { method: "POST" });
 KEY = (await j("/api/keyring", { method: "POST" })).data.key;
 const afterReset = (await j("/api/key/alerts")).data;
 assert(afterReset.alerts.length === 0 && afterReset.unread === 0, "Reset demo clears alerts");
+
+// Smart checkout: $2,450 designer dress with computed rewards and transfer fees
+const quote = await j("/api/smart-checkout");
+assert(quote.status === 200 && quote.data.purchase.amount === 2450, "smart checkout quote loads ($2,450.00 dress)");
+assert(/Example reward terms \(sandbox demo\), not real card terms/.test(quote.data.purchase.disclaimer || quote.data.disclaimer), "disclaimer labels example demo terms");
+const travel = quote.data.options.find((o) => o.id === "travel");
+const cash = quote.data.options.find((o) => o.id === "cashback");
+const ach = quote.data.options.find((o) => o.id === "ach");
+assert(travel && travel.benefits.miles === 10000 && travel.benefits.estValue === 150 && travel.benefits.baseMiles === 9800, `travel: 4× × $2,450 + 200 promo = 10,000 miles, est. $${travel?.benefits.estValue}`);
+assert(cash && cash.benefits.cashBack === 500 && cash.benefits.baseCashBack === 122.5, `cash back: 5% + $377.50 promo = $500.00 (got $${cash?.benefits.cashBack})`);
+assert(ach && ach.benefits.fee === 0 && ach.benefits.savedVsCard === 71.35 && ach.simulated, `ACH: $0 fee, saves $71.35 vs card (got fee=${ach?.benefits.fee} saved=${ach?.benefits.savedVsCard})`);
+assert(quote.data.transfer.cheapestFee === 0 && quote.data.transfer.savedVsCard === 71.35, "cheapest transfer is $0 ACH, saves $71.35 vs card");
+assert(quote.data.transfer.routes.length === 4, "transfer comparison has card-to-card, card-to-merchant, bank-to-card, bank-to-merchant");
+assert(quote.data.bestOptionId === "cashback", "highest dollar benefit is the cash-back card");
+assert(/10,000/.test(travel.benefits.headline) && /\$150\.00/.test(travel.benefits.headline), `travel headline: ${travel.benefits.headline}`);
+assert(/\$500\.00 cash back/.test(cash.benefits.headline), `cash headline: ${cash.benefits.headline}`);
+
+const noPay = await j("/api/smart-checkout/pay", { method: "POST", body: { optionId: "cashback" } });
+assert(noPay.status === 400, "pay refused without confirmedLegitimate");
+const noOpt = await j("/api/smart-checkout/pay", { method: "POST", body: { confirmedLegitimate: true, optionId: "nope" } });
+assert(noOpt.status === 400, "pay refused without a valid option");
+
+const payCash = await j("/api/smart-checkout/pay", { method: "POST", body: { optionId: "cashback", confirmedLegitimate: true } });
+assert(payCash.status === 200 && payCash.data.charge?.status === "completed" && payCash.data.charge.amount === 2450, `cash-back purchase completed ($${payCash.data.charge?.amount} ${payCash.data.charge?.status})`);
+assert(payCash.data.charge.userConfirmedLegitimate === true, "charge is marked user-confirmed legitimate");
+assert(payCash.data.alertId == null, "confirmed-legitimate purchase raises no alert");
+assert(payCash.data.benefits.cashBack === 500, "pay response returns computed $500 cash back");
+console.log(`     cashback   ${String(payCash.data.charge.source).padEnd(13)} order=${payCash.data.charge.orderId || "—"} ${payCash.data.option.productName}`);
+if (payCash.data.charge.source === "simulated") notes.push(`smart-checkout cashback simulated: ${payCash.data.charge.simulatedReason || payCash.data.charge.error}`);
+
+const payAch = await j("/api/smart-checkout/pay", { method: "POST", body: { optionId: "ach", confirmedLegitimate: true } });
+assert(payAch.status === 200 && payAch.data.charge?.status === "completed" && payAch.data.charge.source === "simulated", "ACH purchase is a labeled simulation");
+assert(/simulated/i.test(payAch.data.charge.simulatedReason || ""), `ACH simulatedReason: ${payAch.data.charge.simulatedReason}`);
+assert(payAch.data.alertId == null, "ACH confirmed purchase raises no alert");
+console.log(`     ach        simulated     ${payAch.data.option.productName}`);
+
+const payTravel = await j("/api/smart-checkout/pay", { method: "POST", body: { optionId: "travel", confirmedLegitimate: true } });
+assert(payTravel.status === 200 && payTravel.data.charge?.status === "completed" && payTravel.data.benefits.miles === 10000, "travel-card purchase completed with 10,000 miles");
+console.log(`     travel     ${String(payTravel.data.charge.source).padEnd(13)} order=${payTravel.data.charge.orderId || "—"} ${payTravel.data.option.productName}`);
+if (payTravel.data.charge.source === "simulated") notes.push(`smart-checkout travel simulated: ${payTravel.data.charge.simulatedReason || payTravel.data.charge.error}`);
+
+const alertsAfterShop = (await j("/api/key/alerts")).data.alerts;
+assert(alertsAfterShop.length === 0, `confirmed-legitimate boutique charges raise no alerts (got ${alertsAfterShop.length})`);
+const cardsAfter = (await j("/api/key/cards")).data.cards.filter((c) => c.merchantId === "maisonvale");
+assert(cardsAfter.length === 3, `boutique has three payment methods in Keyring (got ${cardsAfter.length})`);
+
+const recTpl = await j("/api/smart-checkout/recommend", { method: "POST", body: { forceFallback: true } });
+assert(recTpl.data.recommendation?.source === "template" && recTpl.data.executed === false, "recommendation template fallback, executed:false");
+assert(/\$500\.00/.test(recTpl.data.recommendation.text) && /cash back/i.test(recTpl.data.recommendation.text), `template recommends cash back: ${recTpl.data.recommendation.text}`);
+
 await j("/api/demo/reset", { method: "POST" });
 
 if (notes.length) console.log("\nSimulated steps:\n  " + notes.join("\n  "));

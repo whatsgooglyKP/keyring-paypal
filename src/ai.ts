@@ -16,7 +16,7 @@ export interface CardCtx {
   savedAt: string; subscription: string | null; lastCharge: string | null; completedCharges: number;
   usualAmount: number | null; historyNote: string | null;
 }
-export interface ChargeCtx { id: string; cardId: string; merchant: string; amount: number; description: string; at: string; status: string; blockedReason?: string; recognizer?: { looksLikeYouPct: number; verdict: string; headline: string } }
+export interface ChargeCtx { id: string; cardId: string; merchant: string; amount: number; description: string; at: string; status: string; blockedReason?: string; userConfirmedLegitimate?: boolean; recognizer?: { looksLikeYouPct: number; verdict: string; headline: string } }
 
 export interface Explanation {
   source: AiSource; model?: string; explanation: string; recommendedAction: Action; actionReason: string;
@@ -50,20 +50,25 @@ function ungroundedAmount(text: string, data: unknown): string | null {
 }
 
 // ---------- 1. explain one charge ----------
-export function templateExplanation(rec: Recognition, card: CardCtx, attempts: Attempt[] = []): Explanation {
+export function templateExplanation(rec: Recognition, card: CardCtx, attempts: Attempt[] = [], charge?: ChargeCtx): Explanation {
   const allowed = allowedFor(card.status);
-  const want: Action = rec.verdict === "LOOKS_LIKE_YOU" ? "keep" : card.status === "active" ? "lock_card" : "dispute";
+  const confirmed = !!charge?.userConfirmedLegitimate;
+  const want: Action = confirmed || rec.verdict === "LOOKS_LIKE_YOU" ? "keep" : card.status === "active" ? "lock_card" : "dispute";
+  const explanation = confirmed
+    ? `${rec.headline}. You confirmed this purchase is legitimate at checkout. ${rec.facts.slice(0, 2).join(" ")}`
+    : `${rec.headline}. ${rec.facts.slice(0, 3).join(" ")}`;
   return {
-    source: "template", explanation: `${rec.headline}. ${rec.facts.slice(0, 3).join(" ")}`, recommendedAction: allowed.includes(want) ? want : "keep",
-    actionReason: rec.suggestion, attempts, generatedAt: new Date().toISOString(), scoreFrom: "logistic_regression",
+    source: "template", explanation, recommendedAction: allowed.includes(want) ? want : "keep",
+    actionReason: confirmed ? "You confirmed this was you. No action needed." : rec.suggestion,
+    attempts, generatedAt: new Date().toISOString(), scoreFrom: "logistic_regression",
   };
 }
 
 export async function explainCharge(charge: ChargeCtx, rec: Recognition, card: CardCtx, opts: { forceFallback?: boolean } = {}): Promise<Explanation> {
-  if (opts.forceFallback) return templateExplanation(rec, card, [FORCED]);
+  if (opts.forceFallback) return templateExplanation(rec, card, [FORCED], charge);
   const allowed = allowedFor(card.status);
   const data = {
-    charge: { amount: charge.amount, description: charge.description, at: charge.at, status: charge.status, blockedReason: charge.blockedReason },
+    charge: { amount: charge.amount, description: charge.description, at: charge.at, status: charge.status, blockedReason: charge.blockedReason, userConfirmedLegitimate: !!charge.userConfirmedLegitimate },
     card,
     recognizer: {
       looksLikeYouPct: Math.round(rec.looksLikeYou * 100), verdict: rec.verdict, headline: rec.headline,
@@ -83,7 +88,7 @@ export async function explainCharge(charge: ChargeCtx, rec: Recognition, card: C
   const r = await generateJson<{ explanation: string; recommendedAction: Action; actionReason: string }>({
     system: `You are Keyring's charge explainer. A cardholder clicked "I don't recognize this charge". Explain it in 2-3 plain-English sentences and recommend exactly one action from allowedActions.\n${GROUNDING}\n- If the charge was blocked, say it did not go through.
 - Say the score as "Keyring's model rates this X% likely to be you" (X = looksLikeYouPct).
-- If it does not look like the cardholder and lock_card is allowed, prefer lock_card (fast, reversible) and mention in actionReason that they can also dispute the charge to get money back. Recommend revoke_card only if they clearly no longer use the merchant and no active subscription depends on the card. If it looks like them, recommend keep.`,
+- If it does not look like the cardholder and lock_card is allowed, prefer lock_card (fast, reversible) and mention in actionReason that they can also dispute the charge to get money back. Recommend revoke_card only if they clearly no longer use the merchant and no active subscription depends on the card. If it looks like them, or if userConfirmedLegitimate is true (the cardholder already confirmed this purchase is legitimate), recommend keep.`,
     user: `DATA:\n${JSON.stringify(data, null, 1)}`,
     schema,
     validate: (d) => {
@@ -93,7 +98,7 @@ export async function explainCharge(charge: ChargeCtx, rec: Recognition, card: C
       return ungroundedAmount(`${d.explanation} ${d.actionReason}`, data);
     },
   });
-  if (!r.ok || !r.data) return templateExplanation(rec, card, r.attempts);
+  if (!r.ok || !r.data) return templateExplanation(rec, card, r.attempts, charge);
   return { source: "gemini", model: r.model, explanation: r.data.explanation.trim(), recommendedAction: r.data.recommendedAction, actionReason: r.data.actionReason.trim(),
     attempts: r.attempts, generatedAt: new Date().toISOString(), scoreFrom: "logistic_regression" };
 }
@@ -140,4 +145,61 @@ export async function answerQuestion(question: string, ctx: { cards: CardCtx[]; 
   if (ctx.focus) answer = `The AI assistant is unavailable right now, so here is the recognizer's own explanation. ${ctx.focus.recognizer.headline}. ${ctx.focus.recognizer.facts.join(" ")} ${ctx.focus.recognizer.suggestion}`;
   else answer = `The AI assistant is unavailable right now. You have ${ctx.cards.length} saved card(s): ${ctx.cards.map((c) => `${c.merchant} (${c.card}, ${c.status}${c.subscription ? `, pays ${c.subscription}` : ""})`).join("; ")}. Click a charge to see the recognizer's explanation.`;
   return { source: "template", answer, proposedAction: "none", cardId: null, attempts: r.attempts, generatedAt: at };
+}
+
+// ---------- 3. smart-checkout payment recommendation (one grounded sentence) ----------
+export interface CheckoutRecommendation {
+  source: AiSource; model?: string; text: string; recommendedOptionId: string;
+  attempts: Attempt[]; generatedAt: string;
+}
+
+/** Recommend the payment option with the highest computed dollar benefit. Numbers come only from the quote. */
+export async function recommendCheckout(
+  quote: {
+    purchase: { amount: number; productName: string; merchantName: string };
+    options: { id: string; productName: string; benefits: { headline: string; math: string; dollarBenefit: number; fee: number; cashBack?: number; miles?: number; estValue?: number; savedVsCard?: number } }[];
+    transfer: { summary: string; savedVsCard: number; cheapestFee: number };
+    bestOptionId: string;
+    templateRecommendation: string;
+    disclaimer: string;
+  },
+  opts: { forceFallback?: boolean } = {},
+): Promise<CheckoutRecommendation> {
+  const at = new Date().toISOString();
+  const fallback = (attempts: Attempt[]): CheckoutRecommendation => ({
+    source: "template", text: quote.templateRecommendation, recommendedOptionId: quote.bestOptionId, attempts, generatedAt: at,
+  });
+  if (opts.forceFallback) return fallback([FORCED]);
+  const data = {
+    purchase: { amount: quote.purchase.amount, productName: quote.purchase.productName, merchant: quote.purchase.merchantName },
+    options: quote.options.map((o) => ({
+      id: o.id, productName: o.productName, headline: o.benefits.headline, math: o.benefits.math,
+      dollarBenefit: o.benefits.dollarBenefit, fee: o.benefits.fee,
+      cashBack: o.benefits.cashBack, miles: o.benefits.miles, estValue: o.benefits.estValue, savedVsCard: o.benefits.savedVsCard,
+    })),
+    transfer: quote.transfer,
+    bestOptionId: quote.bestOptionId,
+    disclaimer: quote.disclaimer,
+  };
+  const ids = quote.options.map((o) => o.id);
+  const r = await generateJson<{ recommendation: string; optionId: string }>({
+    system: `You are Keyring's checkout assistant. In ONE short sentence, recommend the payment option whose computed dollar benefit is the highest, using ONLY the numbers in the JSON data. Never invent dollar amounts, miles, fees, or rates. Write for a non-technical cardholder. Do not recommend lock, revoke, or any other card action. Quote amounts exactly as given (with cents).\n${GROUNDING}`,
+    user: `DATA:\n${JSON.stringify(data, null, 1)}`,
+    schema: {
+      type: "OBJECT",
+      properties: {
+        recommendation: { type: "STRING", description: "One sentence recommending the highest-dollar-benefit option, mentioning the computed cash back, miles est. value, and fee savings." },
+        optionId: { type: "STRING", enum: ids, description: "id of the recommended option, must be bestOptionId." },
+      },
+      required: ["recommendation", "optionId"],
+    },
+    validate: (d) => {
+      if (!d?.recommendation?.trim()) return "empty text";
+      if (d.recommendation.length > 400) return "recommendation too long";
+      if (d.optionId !== quote.bestOptionId) return `optionId ${d.optionId} is not the highest-benefit option`;
+      return ungroundedAmount(d.recommendation, data);
+    },
+  });
+  if (!r.ok || !r.data) return fallback(r.attempts);
+  return { source: "gemini", model: r.model, text: r.data.recommendation.trim(), recommendedOptionId: r.data.optionId, attempts: r.attempts, generatedAt: at };
 }
